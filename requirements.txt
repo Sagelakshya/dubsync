@@ -1,0 +1,5 @@
+flask>=3.0
+youtube-transcript-api>=1.0
+deep-translator>=1.11
+edge-tts>=6.1
+yt-dlp>=2024.1        # dub.py: download the source video to mux the dub onto

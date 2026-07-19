@@ -1,0 +1,575 @@
+"""dub.py — timestamp-synced translated voiceover for a YouTube video.
+
+Why this exists
+---------------
+`app.py` flattens the transcript into one string (`" ".join(...)`), which throws
+away every caption timestamp. The read-aloud mp3 is then a continuous read with
+no relationship to when things are said on screen — so it never lines up.
+
+This script keeps the timing skeleton the captions already give us:
+  1. fetch the transcript WITH per-cue start/duration (never flatten),
+  2. regroup fragmented cues into whole sentences, each with a [start,end] window,
+  3. translate per sentence (good context AND a known time slot for each line),
+  4. TTS each translated sentence into its own clip (edge-tts),
+  5. FIT each clip into its window: if it runs long, speed it up (ffmpeg atempo,
+     pitch-preserving, capped so it stays natural); if short, the trailing pause
+     absorbs the slack. Drift never accumulates because we re-anchor at each
+     sentence's real caption time whenever there's a pause to recover into.
+  6. lay every clip onto a silent timeline at its real offset -> one dubbed .mp3
+     that lines up with the video end to end. Optionally mux it over a video file.
+
+Deliberately deterministic and dependency-light: reuses the deps app.py already
+has (edge-tts, deep-translator, youtube-transcript-api) plus the bundled ffmpeg.
+
+Usage
+-----
+  python dub.py <youtube url or id> --lang hi
+  python dub.py <url> --lang es --video clip.mp4 --out dubbed.mp4
+  python dub.py <url> --lang hi --max-speed 1.6 --keep-original 0.15
+
+Run inside the venv so the deps resolve:  .venv\\Scripts\\python.exe dub.py ...
+"""
+from __future__ import annotations
+
+import argparse
+import asyncio
+import os
+import re
+import shutil
+import subprocess
+import sys
+import tempfile
+from concurrent.futures import ThreadPoolExecutor
+
+# Reuse the language/voice tables app.py already curates so the two stay in sync.
+from app import LANGUAGES, VOICES, yt_id
+
+# --- locate ffmpeg/ffprobe (portable: env var -> local folder -> PATH) -------
+_HERE = os.path.dirname(os.path.abspath(__file__))
+def _ff_dirs() -> list[str]:
+    """Places to look for ffmpeg, most specific first."""
+    dirs = []
+    env = os.environ.get("FFMPEG_DIR")          # explicit override
+    if env:
+        dirs.append(env)
+    dirs.append(os.path.join(_HERE, "ffmpeg", "bin"))   # drop ffmpeg here to ship it
+    dirs.append(r"D:\Toolkit\ffmpeg\bin")               # Sage05's bundled copy
+    return dirs
+
+def _tool(name: str) -> str:
+    exe = name + (".exe" if os.name == "nt" else "")
+    for d in _ff_dirs():
+        p = os.path.join(d, exe)
+        if os.path.exists(p):
+            return p
+    found = shutil.which(name)                   # anywhere on PATH
+    if found:
+        return found
+    sys.exit(f"Couldn't find {name}. Install ffmpeg and add it to PATH, put the "
+             f"binaries in {os.path.join(_HERE, 'ffmpeg', 'bin')}, or set FFMPEG_DIR.")
+FFMPEG = _tool("ffmpeg")
+FFPROBE = _tool("ffprobe")
+FFMPEG_DIR = os.path.dirname(FFMPEG)             # for yt-dlp's merge step
+
+# Audio format every intermediate clip is normalised to, so ffmpeg's concat
+# demuxer can stitch them without re-encoding surprises.
+SR, AR_ARGS = 24000, ["-ac", "1", "-ar", "24000"]
+
+
+# --- 1. fetch the transcript WITH timings ------------------------------------
+def fetch_cues(vid: str) -> list[dict]:
+    """Return [{text, start, dur}, ...] — timings intact, unlike app.py."""
+    from youtube_transcript_api import YouTubeTranscriptApi
+    if hasattr(YouTubeTranscriptApi, "get_transcript"):        # classic API
+        raw = YouTubeTranscriptApi.get_transcript(vid)
+        return [{"text": d["text"], "start": d["start"], "dur": d["duration"]}
+                for d in raw]
+    fetched = YouTubeTranscriptApi().fetch(vid)                # newer API
+    return [{"text": s.text, "start": s.start, "dur": s.duration} for s in fetched]
+
+
+# --- 2. regroup cues into sentence-sized chunks with a time window -----------
+_END = re.compile(r"[.!?।。？！]['\")\]]?\s*$")   # sentence enders (multi-script)
+def group_sentences(cues: list[dict],
+                    max_secs: float = 9.0, gap: float = 0.8) -> list[dict]:
+    """Merge fragmentary caption cues into whole sentences.
+
+    Auto-captions often split one sentence across several cues and carry no
+    punctuation at all — so we close a group on a sentence ender, OR on a real
+    pause between cues, OR once it's run long enough. That keeps chunks sensible
+    even for punctuation-free transcripts.
+    """
+    groups: list[dict] = []
+    buf, start, last_end = [], None, None
+    for c in cues:
+        text = c["text"].replace("\n", " ").strip()
+        if not text:
+            continue
+        c_start, c_end = c["start"], c["start"] + c["dur"]
+        if start is None:
+            start = c_start
+        # A big silence before this cue -> the previous sentence has ended.
+        if last_end is not None and c_start - last_end > gap and buf:
+            groups.append({"text": " ".join(buf), "start": start, "end": last_end})
+            buf, start = [], c_start
+        buf.append(text)
+        last_end = c_end
+        joined = " ".join(buf)
+        if _END.search(joined) or (last_end - start) >= max_secs:
+            groups.append({"text": joined, "start": start, "end": last_end})
+            buf, start = [], None
+    if buf:
+        groups.append({"text": " ".join(buf), "start": start, "end": last_end})
+    return groups
+
+
+# --- 3. translate each group (threaded; keeps sentence context) --------------
+def translate_groups(groups: list[dict], target: str) -> None:
+    from deep_translator import GoogleTranslator
+
+    def one(text: str) -> str:
+        # A fresh translator per call keeps the threads independent.
+        return GoogleTranslator(source="auto", target=target).translate(text) or text
+
+    with ThreadPoolExecutor(max_workers=8) as pool:
+        out = list(pool.map(one, [g["text"] for g in groups]))
+    for g, t in zip(groups, out):
+        g["tr"] = t
+
+
+# --- 4. TTS each translated group into an mp3 (edge-tts, concurrent) ---------
+async def _synth_all(groups: list[dict], voice: str, workdir: str) -> None:
+    import edge_tts
+    sem = asyncio.Semaphore(6)   # don't hammer Microsoft on long videos
+
+    async def one(i: int, text: str) -> None:
+        async with sem:
+            buf = bytearray()
+            async for part in edge_tts.Communicate(text, voice).stream():
+                if part["type"] == "audio":
+                    buf.extend(part["data"])
+        with open(os.path.join(workdir, f"raw{i}.mp3"), "wb") as f:
+            f.write(bytes(buf))
+
+    await asyncio.gather(*(one(i, g["tr"]) for i, g in enumerate(groups)))
+
+
+# --- ffmpeg helpers ----------------------------------------------------------
+def _run(args: list[str]) -> None:
+    subprocess.run([FFMPEG, "-y", "-hide_banner", "-loglevel", "error", *args],
+                   check=True)
+
+def _dur(path: str) -> float:
+    out = subprocess.check_output(
+        [FFPROBE, "-v", "error", "-show_entries", "format=duration",
+         "-of", "csv=p=0", path]).decode().strip()
+    try:
+        return float(out)
+    except ValueError:
+        return 0.0
+
+def _to_wav(src: str, dst: str, tempo: float = 1.0) -> None:
+    filt = f"aresample={SR}" if tempo == 1.0 else f"atempo={tempo:.4f},aresample={SR}"
+    _run(["-i", src, "-filter:a", filt, *AR_ARGS, dst])
+
+def _silence(seconds: float, dst: str) -> None:
+    _run(["-f", "lavfi", "-t", f"{max(seconds,0):.3f}",
+          "-i", f"anullsrc=r={SR}:cl=mono", *AR_ARGS, dst])
+
+
+def _concat(pieces: list[str], dst: str, workdir: str, tag: str) -> None:
+    """Stitch a list of same-format clips with the ffmpeg concat demuxer."""
+    listfile = os.path.join(workdir, f"list_{tag}.txt")
+    with open(listfile, "w", encoding="utf-8") as f:
+        for p in pieces:
+            f.write(f"file '{p.replace(chr(92), '/')}'\n")
+    _run(["-f", "concat", "-safe", "0", "-i", listfile, "-c", "copy", dst])
+
+
+# --- retime mode: keep audio near natural speed, stretch the VIDEO instead ---
+def _video_info(path: str) -> tuple[str, int, int]:
+    """Return (fps as a string ffmpeg accepts, width, height).
+
+    Parsed by key (not column order) — ffprobe emits fields in the stream's own
+    order, which isn't the order we ask for."""
+    out = subprocess.check_output(
+        [FFPROBE, "-v", "error", "-select_streams", "v:0", "-show_entries",
+         "stream=r_frame_rate,width,height",
+         "-of", "default=noprint_wrappers=1", path]).decode()
+    info = dict(line.split("=", 1) for line in out.strip().splitlines() if "=" in line)
+    return info["r_frame_rate"], int(info["width"]), int(info["height"])
+
+
+def _vseg(src: str, start: float, dur: float, factor: float, fps: str,
+          w: int, h: int, dst: str, smooth: bool) -> float:
+    """Cut [start, start+dur] from the video, retime by `factor` (>1 slows it),
+    re-encode to a uniform format so segments concat cleanly. Returns real dur."""
+    vf = [f"setpts=(PTS-STARTPTS)*{factor:.6f}"]
+    if smooth and factor > 1.01:            # optional motion interpolation on slows
+        vf.append(f"minterpolate=fps={fps}:mi_mode=mci")
+    vf.append(f"scale={w}:{h}")
+    _run(["-ss", f"{start:.3f}", "-i", src, "-t", f"{dur:.3f}",
+          "-an", "-vf", ",".join(vf), "-r", fps, "-pix_fmt", "yuv420p",
+          "-c:v", "libx264", "-preset", "veryfast", "-crf", "20", dst])
+    return _dur(dst)
+
+
+def _fit_audio(raw: str, target: float, dst: str) -> None:
+    """Make `raw` exactly `target` seconds: speed up if longer, pad if shorter.
+    Never slows speech (that sounds unnatural) — short audio is padded instead."""
+    a = _dur(raw)
+    if a > target + 0.01:
+        tempo = a / target
+        _run(["-i", raw, "-filter:a", f"atempo={tempo:.4f},aresample={SR},apad",
+              *AR_ARGS, "-t", f"{target:.3f}", dst])
+    else:
+        _run(["-i", raw, "-filter:a", f"aresample={SR},apad", *AR_ARGS,
+              "-t", f"{target:.3f}", dst])
+
+
+def _split_ratio(R: float, max_audio: float, max_video: float) -> tuple[float, float]:
+    """Split an expansion ratio R>1 across audio speed-up and video slow-down.
+
+    Aim for an even split (sqrt on each) so neither is pushed hard; respect each
+    cap; if both caps are hit and it still doesn't fit, spill the remainder onto
+    the audio (fast speech guarantees the fit; the video bound is never exceeded,
+    which is what protects on-camera faces)."""
+    v = min(R ** 0.5, max_video)
+    a = R / v
+    if a > max_audio:                       # audio would be unnatural -> lean on video
+        a = max_audio
+        v = min(R / a, max_video)
+        a = R / v                           # any residual goes back to audio (may exceed cap)
+    return a, v
+
+
+def build_retimed(groups: list[dict], workdir: str, video: str,
+                  max_audio: float, max_video: float, smooth: bool,
+                  total: float) -> tuple[str, str, list[dict]]:
+    """Build a retimed (silent) video + matching audio track.
+
+    Each sentence's video window is stretched to help the translated line fit at
+    a natural voice, splitting the mismatch between audio and video. Alignment is
+    exact because every audio segment is fit to the *measured* length of its
+    rendered video segment. Returns (video_path, audio_path, warnings)."""
+    fps, w, h = _video_info(video)
+    vsegs: list[str] = []
+    asegs: list[str] = []
+    warnings: list[dict] = []
+    n = len(groups)
+
+    def add(vpath: str, apath: str):
+        vsegs.append(vpath)
+        asegs.append(apath)
+
+    # Lead-in before the first caption: play the video untouched under silence.
+    if groups and groups[0]["start"] > 0.05:
+        d = _vseg(video, 0.0, groups[0]["start"], 1.0, fps, w, h,
+                  os.path.join(workdir, "lead_v.mp4"), False)
+        sil = os.path.join(workdir, "lead_a.wav"); _silence(d, sil)
+        add(os.path.join(workdir, "lead_v.mp4"), sil)
+
+    for i, g in enumerate(groups):
+        raw = os.path.join(workdir, f"raw{i}.mp3")
+        A = _dur(raw)                                   # natural translated length
+        sp = max(g["end"] - g["start"], 0.05)           # on-screen speech window
+        R = A / sp
+
+        if R > 1.0:
+            a_fac, v_fac = _split_ratio(R, max_audio, max_video)
+            if a_fac > max_audio + 1e-3:
+                warnings.append({"start": g["start"], "audio": a_fac,
+                                 "video": v_fac, "text": g["tr"]})
+        else:
+            v_fac = 1.0                                 # audio shorter -> don't touch video
+
+        # Retime the speech video segment, then fit its audio to what rendered.
+        vpath = os.path.join(workdir, f"seg_v{i}.mp4")
+        vd = _vseg(video, g["start"], sp, v_fac, fps, w, h, vpath, smooth)
+        apath = os.path.join(workdir, f"seg_a{i}.wav")
+        _fit_audio(raw, vd, apath)
+        add(vpath, apath)
+
+        # Pause after this sentence (video untouched, silence under it).
+        nxt = groups[i + 1]["start"] if i + 1 < n else total
+        pause = (nxt if nxt else g["end"]) - g["end"]
+        if pause > 0.05:
+            pv = os.path.join(workdir, f"seg_pv{i}.mp4")
+            pd = _vseg(video, g["end"], pause, 1.0, fps, w, h, pv, False)
+            if pd > 0.02:                               # skip if it rendered empty
+                pa = os.path.join(workdir, f"seg_pa{i}.wav"); _silence(pd, pa)
+                add(pv, pa)
+
+    out_v = os.path.join(workdir, "retimed_video.mp4")
+    out_a = os.path.join(workdir, "retimed_audio.wav")
+    _concat(vsegs, out_v, workdir, "v")
+    _concat(asegs, out_a, workdir, "a")
+    return out_v, out_a, warnings
+
+
+# --- 5+6. fit every clip into its window and lay them on the timeline --------
+def build_timeline(groups: list[dict], workdir: str, max_speed: float,
+                   hard_max: float, allow_drift: bool,
+                   total: float | None) -> tuple[str, list[dict]]:
+    """Produce one wav where each clip is fit into its caption's time window.
+
+    The point of the tool: when a translated line is longer than the original
+    slot (English->Hindi expands, and vice-versa), it must still FIT the window
+    so the dub stays locked to the video. So each line is sped up by exactly the
+    factor needed to fit — `atempo` (pitch-preserving, "fast speech", not
+    chipmunk) — up to `hard_max`. Because every line fits, the cursor tracks the
+    real caption times and there is essentially no drift.
+
+    `max_speed` is the *natural* threshold: we only warn when a line has to go
+    faster than that, so you can see which lines got hurried. Lines shorter than
+    their window aren't slowed — the trailing pause absorbs the slack.
+
+    `--allow-drift` restores the older behaviour: cap at `max_speed` for a more
+    natural voice and let long lines overrun (re-anchoring at the next pause).
+    """
+    pieces: list[str] = []   # ordered wav fragments (clips + silences) to concat
+    cursor = 0.0
+    n = len(groups)
+    warnings: list[dict] = []
+    for i, g in enumerate(groups):
+        raw = os.path.join(workdir, f"raw{i}.mp3")
+        clip_len = _dur(raw)
+        actual_start = max(cursor, g["start"])
+        # Budget = time until the next sentence ideally starts (absorbs the pause).
+        nxt = groups[i + 1]["start"] if i + 1 < n else actual_start + clip_len
+        budget = max(nxt - actual_start, 0.01)
+
+        tempo = 1.0
+        if clip_len > budget:                       # too long -> speed up to fit
+            needed = clip_len / budget
+            if allow_drift:                         # old mode: stay natural, drift
+                tempo = min(needed, max_speed)
+            else:                                   # fit mode: fit up to the ceiling
+                tempo = min(needed, hard_max)
+            if needed > max_speed + 1e-3:           # flag anything past "natural"
+                warnings.append({"start": g["start"], "needed": needed,
+                                 "used": tempo, "text": g["tr"]})
+        wav = os.path.join(workdir, f"clip{i}.wav")
+        _to_wav(raw, wav, tempo)
+        final_len = _dur(wav)
+
+        gap = actual_start - cursor                 # silence before this clip
+        if gap > 0.02:
+            sfile = os.path.join(workdir, f"sil{i}.wav")
+            _silence(gap, sfile)
+            pieces.append(sfile)
+        pieces.append(wav)
+        cursor = actual_start + final_len
+
+    # Pad the tail so a muxed video keeps full length / trailing silence.
+    if total and total > cursor + 0.05:
+        tail = os.path.join(workdir, "tail.wav")
+        _silence(total - cursor, tail)
+        pieces.append(tail)
+
+    listfile = os.path.join(workdir, "list.txt")
+    with open(listfile, "w", encoding="utf-8") as f:
+        for p in pieces:
+            f.write(f"file '{p.replace(chr(92), '/')}'\n")
+    joined = os.path.join(workdir, "joined.wav")
+    _run(["-f", "concat", "-safe", "0", "-i", listfile, "-c", "copy", joined])
+    return joined, warnings
+
+
+def mux(video: str, dub_wav: str, out: str, keep_original: float) -> None:
+    """Replace (or duck-mix) the video's audio with the dubbed track."""
+    if keep_original > 0:
+        # Keep the original quietly under the dub (ambience, laughter, music).
+        _run(["-i", video, "-i", dub_wav, "-filter_complex",
+              f"[0:a]volume={keep_original}[a0];[1:a]volume=1.0[a1];"
+              f"[a0][a1]amix=inputs=2:duration=first:dropout_transition=0[a]",
+              "-map", "0:v", "-map", "[a]", "-c:v", "copy",
+              "-shortest", out])
+    else:
+        _run(["-i", video, "-i", dub_wav, "-map", "0:v", "-map", "1:a",
+              "-c:v", "copy", "-shortest", out])
+
+
+def download_video(url: str, dst_dir: str) -> str:
+    """Fetch the source video with yt-dlp (bundled ffmpeg does the merge)."""
+    from yt_dlp import YoutubeDL
+    outtmpl = os.path.join(dst_dir, "source.%(ext)s")
+    opts = {
+        "format": "bv*+ba/b",              # best video+audio, else best single file
+        "merge_output_format": "mp4",
+        "outtmpl": outtmpl,
+        "ffmpeg_location": FFMPEG_DIR,
+        "quiet": True, "no_warnings": True, "noprogress": True,
+    }
+    with YoutubeDL(opts) as ydl:
+        info = ydl.extract_info(url, download=True)
+    path = os.path.join(dst_dir, "source.mp4")
+    if not os.path.exists(path):                    # fall back to whatever it wrote
+        rd = (info.get("requested_downloads") or [{}])[0]
+        path = rd.get("filepath") or path
+    if not os.path.exists(path):
+        sys.exit("Video download failed (yt-dlp produced no file).")
+    return path
+
+
+_VIDEO_EXTS = (".mp4", ".mkv", ".mov", ".webm")
+
+def _interactive_argv() -> list[str]:
+    """Ask the questions when the tool is launched with no arguments (i.e. it was
+    double-clicked). Builds the same argv the command line would take."""
+    print("=" * 52)
+    print("  Video translation - paste a link, get a dubbed video")
+    print("=" * 52)
+    url = input("\nPaste the YouTube link and press Enter:\n> ").strip()
+    if not url:
+        print("No link given. Closing.")
+        input("\nPress Enter to close.")
+        sys.exit(0)
+    print("\nLanguage codes:  hi=Hindi  es=Spanish  fr=French  de=German")
+    print("                 ar=Arabic  zh-CN=Chinese  ja=Japanese  en=English")
+    lang = input("Language code [default hi]:\n> ").strip() or "hi"
+    print("\nWhat kind of footage is it?")
+    print("  1) Talking head  (a person speaking on camera)")
+    print("  2) No faces      (POV / gameplay / screen recording)")
+    print("  3) Audio only    (just the dubbed .mp3, no video)")
+    mode = input("Choose 1, 2 or 3 [default 2]:\n> ").strip() or "2"
+    argv = [url, "--lang", lang]
+    if mode == "1":
+        argv += ["--faces", "--download", "--out", "dubbed.mp4"]
+    elif mode == "3":
+        argv += ["--out", "dubbed.mp3"]
+    else:
+        argv += ["--broll", "--download", "--out", "dubbed.mp4"]
+    print()
+    return argv
+
+
+def main() -> None:
+    interactive = len(sys.argv) == 1        # double-clicked, not run from a shell
+    ap = argparse.ArgumentParser(description="Timestamp-synced translated dub of a YouTube video.")
+    ap.add_argument("url", help="YouTube URL or 11-char id")
+    ap.add_argument("--lang", required=True, help="target code, e.g. hi es fr (see app.py LANGUAGES)")
+    ap.add_argument("--out", help="output file (.mp3, or a video ext when muxing)")
+    ap.add_argument("--video", help="local video file to mux the dub onto (skips download)")
+    ap.add_argument("--download", action="store_true",
+                    help="download the source video and mux the dub onto it")
+    ap.add_argument("--max-speed", type=float, default=1.5,
+                    help="'natural' speed threshold; lines that must go faster to fit are flagged (default 1.5)")
+    ap.add_argument("--hard-max", type=float, default=3.0,
+                    help="absolute speed ceiling used to guarantee fit (default 3.0)")
+    ap.add_argument("--allow-drift", action="store_true",
+                    help="don't force the fit: cap at --max-speed for a natural voice and let long lines drift")
+    ap.add_argument("--keep-original", type=float, default=0.0,
+                    help="0-1 volume of the original audio kept under the dub (video output only)")
+    ap.add_argument("--retime", action="store_true",
+                    help="keep the voice near natural speed and stretch the VIDEO to fit instead "
+                         "(hybrid: splits the mismatch across audio and video). Implies a video output.")
+    ap.add_argument("--max-video", type=float, default=1.25,
+                    help="retime mode: cap on how far the video may be slowed (default 1.25; "
+                         "use ~1.1 for talking heads, higher for faceless footage)")
+    ap.add_argument("--smooth", action="store_true",
+                    help="retime mode: motion-interpolate slowed video (smoother but slow to render)")
+    ap.add_argument("--faces", action="store_true",
+                    help="preset for talking-head footage: --retime with a tight video bound (--max-video 1.1)")
+    ap.add_argument("--broll", action="store_true",
+                    help="preset for faceless footage (POV/gameplay/screencast): --retime --max-video 1.6 --smooth")
+    args = ap.parse_args(_interactive_argv() if interactive else None)
+
+    # Presets just set the retime knobs; an explicit --max-video still wins.
+    if args.faces and args.broll:
+        sys.exit("Pick one of --faces / --broll, not both.")
+    if args.faces:
+        args.retime = True
+        if args.max_video == 1.25:
+            args.max_video = 1.1
+    if args.broll:
+        args.retime = True
+        args.smooth = True
+        if args.max_video == 1.25:
+            args.max_video = 1.6
+
+    vid = yt_id(args.url)
+    if not vid:
+        sys.exit("That doesn't look like a YouTube link or id.")
+    if args.lang not in dict((c, l) for l, c in LANGUAGES):
+        sys.exit(f"Unknown lang '{args.lang}'. Known: {', '.join(c for _, c in LANGUAGES)}")
+    voice = VOICES.get(args.lang, VOICES["en"])
+
+    # Decide up front whether we're producing a video (mux) or just audio.
+    out = args.out
+    want_video = bool(args.video) or args.download or args.retime or (
+        out is not None and out.lower().endswith(_VIDEO_EXTS))
+    if out is None:
+        out = "dubbed.mp4" if want_video else "dubbed.mp3"
+
+    print("Fetching captions (with timings)...")
+    cues = fetch_cues(vid)
+    if not cues:
+        sys.exit("This video has no captions to work from.")
+    groups = group_sentences(cues)
+    print(f"  {len(cues)} cues -> {len(groups)} sentences")
+
+    print("Translating...")
+    translate_groups(groups, args.lang)
+
+    with tempfile.TemporaryDirectory(prefix="dub_") as workdir:
+        print("Generating voice...")
+        asyncio.run(_synth_all(groups, voice, workdir))
+
+        video_path = args.video
+        if want_video and not video_path:
+            print("Downloading video...")
+            video_path = download_video(f"https://www.youtube.com/watch?v={vid}", workdir)
+        total = _dur(video_path) if video_path else None
+
+        if args.retime:
+            if not video_path:
+                sys.exit("--retime needs the video: pass --video FILE or --download.")
+            print("Retiming video to the voice (this re-encodes; be patient)...")
+            rv, ra, warns = build_retimed(
+                groups, workdir, video_path, args.max_speed, args.max_video,
+                args.smooth, total or 0.0)
+            print("Muxing...")
+            _run(["-i", rv, "-i", ra, "-map", "0:v", "-map", "1:a",
+                  "-c:v", "copy", "-shortest", out])
+        else:
+            print("Fitting to the timeline...")
+            joined, warns = build_timeline(
+                groups, workdir, args.max_speed, args.hard_max, args.allow_drift, total)
+            if video_path:
+                print("Muxing onto the video...")
+                mux(video_path, joined, out, args.keep_original)
+            else:
+                _run(["-i", joined, "-b:a", "160k", out])
+
+    if warns and args.retime:
+        fastest = max(w["audio"] for w in warns)
+        print(f"Note: {len(warns)} line(s) expanded past both the audio and video caps; "
+              f"audio took the remainder (up to {fastest:.2f}x) to keep the fit. "
+              f"Loosen with --max-video / --max-speed, or --smooth for cleaner slow video.")
+    elif warns:
+        fastest = max(w["needed"] for w in warns)
+        mode = "let it drift" if args.allow_drift else f"sped up (capped at {args.hard_max:g}x)"
+        print(f"Note: {len(warns)} line(s) ran longer than their slot at a natural pace; "
+              f"{mode} to keep sync (fastest needed {fastest:.2f}x). "
+              f"Tighter sync vs. calmer voice is the --max-speed / --hard-max / --allow-drift trade.")
+    print(f"Done -> {out}")
+
+
+if __name__ == "__main__":
+    # When double-clicked (no args) keep the window open so the person can read
+    # the result or any error, instead of the console flashing shut.
+    _interactive = len(sys.argv) == 1
+    try:
+        main()
+    except SystemExit as e:
+        if _interactive and e.code not in (0, None):
+            print(f"\nStopped: {e.code}")
+    except Exception:
+        if not _interactive:
+            raise
+        import traceback
+        traceback.print_exc()
+    finally:
+        if _interactive:
+            input("\nPress Enter to close.")

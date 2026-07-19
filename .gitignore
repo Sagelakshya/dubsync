@@ -1,0 +1,14 @@
+# Python
+.venv/
+__pycache__/
+*.pyc
+
+# Bundled binaries / runtime (shipped via Releases, never committed)
+ffmpeg/
+runtime/
+
+# Build + output artifacts
+*.zip
+dubbed.mp4
+dubbed.mp3
+*.tmp
