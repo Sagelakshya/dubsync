@@ -70,5 +70,9 @@ Python · [yt-dlp](https://github.com/yt-dlp/yt-dlp) · [edge-tts](https://githu
 
 ## License
 
-[MIT](LICENSE). Everything runs locally; nothing you translate is uploaded to a dubsync server
-(there isn't one).
+dubsync's own code is [MIT](LICENSE). It builds on open-source software (ffmpeg, edge-tts, yt-dlp,
+Flask and others) and calls free external services (Google Translate, Microsoft voices, YouTube) —
+all credited, with their licenses, in [THIRD-PARTY-LICENSES.md](THIRD-PARTY-LICENSES.md). The bundled
+ffmpeg is GPLv3 and edge-tts is LGPLv3; the portable download ships their full license texts.
+
+Everything runs locally; nothing you translate is uploaded to a dubsync server (there isn't one).
