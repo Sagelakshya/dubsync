@@ -52,35 +52,13 @@ if not exist .venv (
   call .venv\Scripts\activate.bat
 )
 
-REM ---------- ask what to make ----------
+REM ---------- run the tool ----------
+REM dub.py's own interactive menu asks everything: link, language, Hinglish,
+REM transcript source (Whisper / captions) and footage type. Keeping the
+REM questions in one place (dub.py) means this launcher never drifts out of
+REM sync with them as options are added.
 echo.
-echo ================= Video translation =================
-set "URL="
-set /p "URL=Paste the YouTube link and press Enter:  "
-if "!URL!"=="" ( echo No link given. & pause & exit /b 1 )
-
-echo.
-echo  Language codes:  hi=Hindi  es=Spanish  fr=French  de=German
-echo                   ar=Arabic  zh-CN=Chinese  ja=Japanese  en=English
-set "LANG=hi"
-set /p "LANG=Language code [default hi]:  "
-
-echo.
-echo  What kind of footage is it?
-echo    1^) Talking head  ^(a person speaking on camera^)
-echo    2^) No faces      ^(POV / gameplay / screen recording^)
-echo    3^) Audio only    ^(just the dubbed .mp3, no video^)
-set "MODE=2"
-set /p "MODE=Choose 1, 2 or 3 [default 2]:  "
-
-set "FLAGS=--broll --download --out dubbed.mp4"
-if "!MODE!"=="1" set "FLAGS=--faces --download --out dubbed.mp4"
-if "!MODE!"=="3" set "FLAGS=--out dubbed.mp3"
-
-echo.
-echo Working... downloading, translating, voicing and syncing. Please wait.
-echo.
-python dub.py "!URL!" --lang !LANG! !FLAGS!
+python dub.py
 
 echo.
 echo Finished. Look for dubbed.mp4 ^(or dubbed.mp3^) in this folder:

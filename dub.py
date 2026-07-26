@@ -43,6 +43,8 @@ from concurrent.futures import ThreadPoolExecutor
 
 # Reuse the language/voice tables app.py already curates so the two stay in sync.
 from app import LANGUAGES, VOICES, yt_id
+import hinglish     # optional Hinglish restyle (local Gemma) / Sarvam API backend
+import transcribe   # Whisper transcription (the trustworthy transcript source)
 
 # --- locate ffmpeg/ffprobe (portable: env var -> local folder -> PATH) -------
 _HERE = os.path.dirname(os.path.abspath(__file__))
@@ -77,15 +79,40 @@ SR, AR_ARGS = 24000, ["-ac", "1", "-ar", "24000"]
 
 
 # --- 1. fetch the transcript WITH timings ------------------------------------
-def fetch_cues(vid: str) -> list[dict]:
-    """Return [{text, start, dur}, ...] — timings intact, unlike app.py."""
+_EN_CODES = ["en", "en-US", "en-GB", "en-IN"]
+
+def _cue_of(d) -> dict:
+    """Normalise a transcript item (dict on the classic API, object on the newer one)."""
+    if isinstance(d, dict):
+        return {"text": d["text"], "start": d["start"], "dur": d["duration"]}
+    return {"text": d.text, "start": d.start, "dur": d.duration}
+
+
+def fetch_cues(vid: str) -> tuple[list[dict], bool | None]:
+    """Return (cues, is_generated). Timings intact, unlike app.py.
+
+    Prefers a *human-made* English track when one exists, and reports whether the
+    captions we ended up using are auto-generated — so the caller can warn that
+    they're the error-prone kind (that's the whole reason Whisper is the default).
+    `is_generated` is True/False when known, else None.
+    """
     from youtube_transcript_api import YouTubeTranscriptApi
+    try:   # transcript-LIST API lets us tell manual from auto and prefer manual
+        tl = (YouTubeTranscriptApi.list_transcripts(vid)
+              if hasattr(YouTubeTranscriptApi, "list_transcripts")
+              else YouTubeTranscriptApi().list(vid))
+        try:
+            t, gen = tl.find_manually_created_transcript(_EN_CODES), False
+        except Exception:
+            t = tl.find_transcript(_EN_CODES)
+            gen = bool(getattr(t, "is_generated", True))
+        return [_cue_of(d) for d in t.fetch()], gen
+    except Exception:
+        pass
+    # Fallback: simplest API, generation unknown.
     if hasattr(YouTubeTranscriptApi, "get_transcript"):        # classic API
-        raw = YouTubeTranscriptApi.get_transcript(vid)
-        return [{"text": d["text"], "start": d["start"], "dur": d["duration"]}
-                for d in raw]
-    fetched = YouTubeTranscriptApi().fetch(vid)                # newer API
-    return [{"text": s.text, "start": s.start, "dur": s.duration} for s in fetched]
+        return [_cue_of(d) for d in YouTubeTranscriptApi.get_transcript(vid)], None
+    return [_cue_of(d) for d in YouTubeTranscriptApi().fetch(vid)], None
 
 
 # --- 2. regroup cues into sentence-sized chunks with a time window -----------
@@ -412,6 +439,30 @@ def download_video(url: str, dst_dir: str) -> str:
     return path
 
 
+def download_audio(url: str, dst_dir: str) -> str:
+    """Fetch just the audio track (for Whisper when we don't also need the video)."""
+    from yt_dlp import YoutubeDL
+    opts = {
+        "format": "ba/b",                  # best audio, else best single file
+        "outtmpl": os.path.join(dst_dir, "audio.%(ext)s"),
+        "ffmpeg_location": FFMPEG_DIR,
+        "quiet": True, "no_warnings": True, "noprogress": True,
+    }
+    with YoutubeDL(opts) as ydl:
+        info = ydl.extract_info(url, download=True)
+    rd = (info.get("requested_downloads") or [{}])[0]
+    path = rd.get("filepath")
+    if not path or not os.path.exists(path):            # fall back to guessing the ext
+        for ext in ("m4a", "webm", "opus", "mp3", "wav"):
+            p = os.path.join(dst_dir, f"audio.{ext}")
+            if os.path.exists(p):
+                path = p
+                break
+    if not path or not os.path.exists(path):
+        sys.exit("Audio download failed (yt-dlp produced no file).")
+    return path
+
+
 _VIDEO_EXTS = (".mp4", ".mkv", ".mov", ".webm")
 
 def _interactive_argv() -> list[str]:
@@ -428,12 +479,27 @@ def _interactive_argv() -> list[str]:
     print("\nLanguage codes:  hi=Hindi  es=Spanish  fr=French  de=German")
     print("                 ar=Arabic  zh-CN=Chinese  ja=Japanese  en=English")
     lang = input("Language code [default hi]:\n> ").strip() or "hi"
+    hinglish_argv: list[str] = []
+    if lang == "hi":
+        print("\nSpeak natural Hinglish (Hindi-English mix, like a real YouTuber)?")
+        print("  1) Yes - local Gemma   (free, offline; needs Ollama + a GPU on this PC)")
+        print("  2) Yes - Sarvam API    (best quality, no GPU; needs a SARVAM_API_KEY)")
+        print("  3) No  - pure Hindi")
+        hmode = input("Choose 1, 2 or 3 [default 1]:\n> ").strip() or "1"
+        if hmode == "1":
+            hinglish_argv = ["--hinglish", "--hinglish-engine", "ollama"]
+        elif hmode == "2":
+            hinglish_argv = ["--hinglish", "--hinglish-engine", "sarvam"]
+    print("\nTranscript source?")
+    print("  1) Whisper           (transcribe the audio ourselves - accurate, recommended)")
+    print("  2) YouTube captions  (faster, but auto-captions are often wrong)")
+    source = "captions" if (input("Choose 1 or 2 [default 1]:\n> ").strip() or "1") == "2" else "whisper"
     print("\nWhat kind of footage is it?")
     print("  1) Talking head  (a person speaking on camera)")
     print("  2) No faces      (POV / gameplay / screen recording)")
     print("  3) Audio only    (just the dubbed .mp3, no video)")
     mode = input("Choose 1, 2 or 3 [default 2]:\n> ").strip() or "2"
-    argv = [url, "--lang", lang]
+    argv = [url, "--lang", lang, "--source", source] + hinglish_argv
     if mode == "1":
         argv += ["--faces", "--download", "--out", "dubbed.mp4"]
     elif mode == "3":
@@ -473,6 +539,22 @@ def main() -> None:
                     help="preset for talking-head footage: --retime with a tight video bound (--max-video 1.1)")
     ap.add_argument("--broll", action="store_true",
                     help="preset for faceless footage (POV/gameplay/screencast): --retime --max-video 1.6 --smooth")
+    ap.add_argument("--hinglish", action="store_true",
+                    help="speak natural Hinglish (Hindi-English mix) instead of formal Hindi (--lang hi only)")
+    ap.add_argument("--hinglish-engine", choices=("ollama", "sarvam"), default="ollama",
+                    help="Hinglish backend: 'ollama' = local Gemma (free, offline, needs a GPU); "
+                         "'sarvam' = Sarvam API (best quality, no GPU, needs SARVAM_API_KEY)")
+    ap.add_argument("--hinglish-model", default=None,
+                    help="override the model (default: gemma3:4b for ollama, mayura:v1 for sarvam)")
+    ap.add_argument("--sarvam-key", default=None,
+                    help="Sarvam API key (else read from the SARVAM_API_KEY env var)")
+    ap.add_argument("--source", choices=("whisper", "captions"), default="whisper",
+                    help="transcript source: 'whisper' = transcribe the audio ourselves "
+                         "(accurate, default); 'captions' = use YouTube captions (faster, "
+                         "but auto-captions are error-prone)")
+    ap.add_argument("--whisper-model", default="small",
+                    help="faster-whisper model size: tiny/base/small/medium/large-v3 "
+                         "(bigger = more accurate, slower; default small)")
     args = ap.parse_args(_interactive_argv() if interactive else None)
 
     # Presets just set the retime knobs; an explicit --max-video still wins.
@@ -493,6 +575,8 @@ def main() -> None:
         sys.exit("That doesn't look like a YouTube link or id.")
     if args.lang not in dict((c, l) for l, c in LANGUAGES):
         sys.exit(f"Unknown lang '{args.lang}'. Known: {', '.join(c for _, c in LANGUAGES)}")
+    if args.hinglish and args.lang != "hi":
+        sys.exit("--hinglish is Hindi-only; use --lang hi (or drop --hinglish).")
     voice = VOICES.get(args.lang, VOICES["en"])
 
     # Decide up front whether we're producing a video (mux) or just audio.
@@ -502,24 +586,52 @@ def main() -> None:
     if out is None:
         out = "dubbed.mp4" if want_video else "dubbed.mp3"
 
-    print("Fetching captions (with timings)...")
-    cues = fetch_cues(vid)
-    if not cues:
-        sys.exit("This video has no captions to work from.")
-    groups = group_sentences(cues)
-    print(f"  {len(cues)} cues -> {len(groups)} sentences")
-
-    print("Translating...")
-    translate_groups(groups, args.lang)
+    url = f"https://www.youtube.com/watch?v={vid}"
 
     with tempfile.TemporaryDirectory(prefix="dub_") as workdir:
-        print("Generating voice...")
-        asyncio.run(_synth_all(groups, voice, workdir))
-
+        # Get the source media up front if we'll mux a video, or if Whisper needs it.
         video_path = args.video
         if want_video and not video_path:
             print("Downloading video...")
-            video_path = download_video(f"https://www.youtube.com/watch?v={vid}", workdir)
+            video_path = download_video(url, workdir)
+
+        # Transcript source: Whisper (accurate, default) or YouTube captions (fast).
+        if args.source == "whisper":
+            media = video_path
+            if not media:
+                print("Downloading audio...")
+                media = download_audio(url, workdir)
+            print(f"Transcribing with Whisper ({args.whisper_model}; first run loads the model)...")
+            cues = transcribe.transcribe(media, model_size=args.whisper_model, lang="en")
+            if not cues:
+                sys.exit("Whisper found no speech (silent or music-only audio?).")
+        else:
+            print("Fetching captions...")
+            cues, generated = fetch_cues(vid)
+            if not cues:
+                sys.exit("This video has no captions. Re-run with --source whisper.")
+            if generated:
+                print("  ! Heads-up: these are AUTO-GENERATED captions (often wrong). "
+                      "Re-run with --source whisper for accuracy.")
+        groups = group_sentences(cues)
+        print(f"  {len(cues)} segments -> {len(groups)} sentences")
+
+        # Translate. Hinglish has two backends: the Sarvam API goes English->Hinglish
+        # in one step (skip Google), while the local Gemma path restyles Google's Hindi.
+        if args.hinglish and args.hinglish_engine == "sarvam":
+            print("Translating to Hinglish (Sarvam API)...")
+            hinglish.apply(groups, engine="sarvam", api_key=args.sarvam_key,
+                           model=args.hinglish_model)
+        else:
+            print("Translating...")
+            translate_groups(groups, args.lang)
+            if args.hinglish:
+                print("Restyling to Hinglish (local Gemma)...")
+                hinglish.apply(groups, engine="ollama", model=args.hinglish_model)
+
+        print("Generating voice...")
+        asyncio.run(_synth_all(groups, voice, workdir))
+
         total = _dur(video_path) if video_path else None
 
         if args.retime:
