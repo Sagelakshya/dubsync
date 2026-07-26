@@ -149,8 +149,49 @@ How it works: a deterministic dictionary swaps the words that always swap
 (व्यवसाय→बिज़नेस), then a local Gemma-3-4B pass fixes the rest in one batched call.
 The model only *restyles* Hindi that Google already translated — it never
 translates from scratch, which is where small models invent words. Uses the GPU if
-you have one, CPU otherwise. If Ollama isn't running the dub still succeeds, in
-accurate (slightly more formal) Hindi rather than failing.
+you have one, CPU otherwise. If Ollama isn't running the dub **stops with an error**
+rather than quietly handing back formal Hindi: you asked for Hinglish, so silently
+serving something else would be a downgrade with nothing on screen to say so. The
+model is checked before transcription starts, so you find out in seconds.
+
+### Idioms — English idiom → Hindi idiom (English → Hindi)
+
+Translators are confidently literal about figurative language. "You can see the
+blood run from their face" comes back as people visibly **bleeding**; "brownie
+points" as ब्राउनी पॉइंट; "that old chestnut" as पुराना चेस्टनट. The listener
+doesn't hear a translation artifact, they hear a sentence that makes no sense.
+
+Every English→Hindi dub now runs a deterministic idiom pass first. The idiom is
+replaced by **the Hindi idiom used in the same situation**, never by its literal
+words and never by a flattened paraphrase (a paraphrase is accurate but reads like
+a textbook — चेहरे का रंग उड़ जाना is what a Hindi speaker actually says).
+
+| English | plain translation | with the dictionary |
+|---|---|---|
+| see the blood run from their face | उनके चेहरे से **खून बहता** देख सकते हैं | उनके **चेहरे का रंग उड़** जाता है |
+| who gets all the brownie points | सभी **ब्राउनी पॉइंट** किसे मिलते हैं | **शाबाशी** किसे मिलती है |
+| remember that old chestnut? | वह **पुराना चेस्टनट** याद है? | वो **घिसी-पिटी बात** याद है? |
+| give me a break | मुझे एक **विराम** दें | थोड़ा **चैन से रहने दो** |
+| she was really hopeless | वह वास्तव में **निराश** थी | वो पढ़ाई में बिल्कुल **फिसड्डी** थी |
+
+It runs for any English→Hindi translation, with or without `--hinglish`, because
+it fixes meaning rather than register. No model and no network: the same input
+always maps the same way.
+
+**The dictionary is data, not code** — [`data/idioms_en_hi.json`](data/idioms_en_hi.json).
+Add entries without touching Python or rebuilding anything, then check them:
+
+```bash
+python verify.py                 # run every entry through the real translator
+python idioms.py --list          # show the dictionary
+python idioms.py "some english"  # see plain vs idiom-corrected side by side
+```
+
+`verify.py` is the growth gate. A bad entry doesn't crash, it just ships a wrong
+sentence quietly, so mechanical faults (an entry that doesn't match its own
+example, a placeholder lost in translation) **fail**, and slots where Hindi
+agreement could break are flagged for a human to read. `idioms.py` imports nothing
+from dubsync, so it is reusable for subtitles, copy, or any other English→Hindi work.
 
 - **Dense speech:** effectively perfect — a 14-min talk to Spanish held under ~1s
   drift with the final line dead on time; every line lands on its caption time.

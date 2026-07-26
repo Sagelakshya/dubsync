@@ -72,7 +72,8 @@ if ($LASTEXITCODE -ne 0) { throw "pip install failed" }
 
 # --- 3. the app itself --------------------------------------------------------
 Step "Copying the app"
-foreach ($f in @("app.py", "dub.py", "hinglish.py", "transcribe.py",
+foreach ($f in @("app.py", "dub.py", "hinglish.py", "idioms.py", "transcribe.py",
+                 "verify.py",
                  "requirements.txt", "README.md", "THIRD-PARTY-LICENSES.md")) {
     Copy-Item (Join-Path $Root $f) $App
 }
@@ -80,6 +81,9 @@ foreach ($opt in @("LICENSE", "LICENSE.txt")) {            # MIT text, if it's h
     if (Test-Path (Join-Path $Root $opt)) { Copy-Item (Join-Path $Root $opt) $App }
 }
 Copy-Item (Join-Path $Root "licenses") $App -Recurse
+# The idiom dictionary is DATA, not code: it has to ship, and a user can edit it
+# in place to add their own idioms without rebuilding anything.
+Copy-Item (Join-Path $Root "data") $App -Recurse
 
 # --- 4. ffmpeg ----------------------------------------------------------------
 # Only ffmpeg + ffprobe: ffplay is another ~30 MB and the tool never calls it.

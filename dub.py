@@ -44,6 +44,7 @@ from concurrent.futures import ThreadPoolExecutor
 # Reuse the language/voice tables app.py already curates so the two stay in sync.
 from app import LANGUAGES, VOICES, yt_id
 import hinglish     # optional Hinglish restyle (local Gemma via Ollama)
+import idioms       # English idiom -> Hindi idiom, deterministic (EN->HI only)
 import transcribe   # Whisper transcription (the trustworthy transcript source)
 
 # --- locate ffmpeg/ffprobe (portable: env var -> local folder -> PATH) -------
@@ -257,17 +258,53 @@ def _group_by_time(cues: list[dict], max_secs: float, gap: float) -> list[dict]:
 
 
 # --- 3. translate each group (threaded; keeps sentence context) --------------
-def translate_groups(groups: list[dict], target: str) -> None:
+def translate_groups(groups: list[dict], target: str) -> int:
+    """Translate every group's text into `target`. Returns how many idioms were
+    replaced, so the caller can report it.
+
+    For Hindi this is not a plain pass-through to Google. English idioms are
+    detected in the ENGLISH first and masked, so the translator never gets the
+    chance to render them literally ("the blood run from their face" as actual
+    bleeding); the Hindi idiom is spliced into the slot afterwards. See idioms.py
+    for why masking beats patching the Hindi output.
+
+    Detection happens once, here, and the resulting tags are stored on the group
+    as "idioms". Later stages read that tag rather than re-detecting: it is how
+    the Hinglish guard below knows a span was substituted on purpose, and it is
+    what a transcript view would show.
+    """
     from deep_translator import GoogleTranslator
 
-    def one(text: str) -> str:
+    # Idioms are an EN->HI asset. Other targets take the plain path unchanged.
+    data = idioms.load() if target == "hi" else None
+    use_idioms = bool(data and len(data))
+
+    def one(g: dict) -> tuple[str, list]:
         # A fresh translator per call keeps the threads independent.
-        return GoogleTranslator(source="auto", target=target).translate(text) or text
+        def tr(s: str) -> str:
+            return GoogleTranslator(source="auto", target=target).translate(s) or s
+
+        text = g["text"]
+        if not use_idioms:
+            return tr(text), []
+        masked, marks = data.mark(text)
+        if not marks:
+            return tr(text), []
+        out, lost = idioms.splice(tr(masked), marks)
+        if lost:
+            # A placeholder didn't survive, so the sentence would carry a hole
+            # where its idiom belongs. Re-translate the original instead: an
+            # over-literal line is recoverable by ear, a missing clause is not.
+            return tr(text), []
+        return out, marks
 
     with ThreadPoolExecutor(max_workers=8) as pool:
-        out = list(pool.map(one, [g["text"] for g in groups]))
-    for g, t in zip(groups, out):
+        out = list(pool.map(one, groups))
+    for g, (t, marks) in zip(groups, out):
         g["tr"] = t
+        if marks:
+            g["idioms"] = marks
+    return sum(len(m) for _, m in out)
 
 
 # --- 4. TTS each translated group into an mp3 (edge-tts, concurrent) ---------
@@ -751,9 +788,15 @@ def run_dub(args, progress=None) -> str:
         # Google's Hindi, never a translation of its own — the model only fixes
         # register and wrong words, which is what keeps it from inventing meaning.
         say(42, "Translating...")
-        translate_groups(groups, args.lang)
+        n_idioms = translate_groups(groups, args.lang)
+        if n_idioms:
+            say(None, f"  {n_idioms} idiom(s) replaced with Hindi equivalents")
         if args.hinglish:
             say(55, "Restyling to Hinglish (local Gemma)...")
+            # Keep the pre-restyle text for any line carrying an idiom. Gemma is
+            # measured at 7/7 for leaving spliced idioms alone, but "measured
+            # once" isn't "guaranteed", and the idiom was put there deliberately.
+            pre_restyle = {i: g["tr"] for i, g in enumerate(groups) if g.get("idioms")}
             try:
                 hinglish.apply(
                     groups, model=args.hinglish_model,
@@ -766,6 +809,18 @@ def run_dub(args, progress=None) -> str:
                     f"The Hinglish pass failed part-way through.\n{e}\n"
                     "Nothing was written. Free some memory and run it again, or "
                     "turn Hinglish off to dub in regular Hindi.") from e
+
+            # Guard: if the restyle dropped an idiom we deliberately spliced in,
+            # keep the pre-restyle line for that line only. Reverting one line
+            # costs a little Hinglish register; losing the idiom costs the
+            # meaning, which is the whole reason the dictionary exists.
+            reverted = 0
+            for i, g in enumerate(groups):
+                if g.get("idioms") and idioms.survived(g["tr"], g["idioms"]):
+                    g["tr"] = pre_restyle[i]
+                    reverted += 1
+            if reverted:
+                say(None, f"  kept {reverted} line(s) un-restyled to protect their idioms")
 
         say(65, "Generating voice...")
         # Per-line ticks: TTS is the step where a long video sits longest, so the

@@ -1,0 +1,177 @@
+{
+  "version": 1,
+  "source_language": "en",
+  "target_language": "hi",
+  "about": "English idiom -> the HINDI IDIOM used in the same situation. Never the literal words, and never a plain-language paraphrase: a paraphrase is accurate but reads like a textbook, and the point of this file is that a listener should hear what a Hindi speaker would actually say.",
+  "how_to_add_an_entry": [
+    "1. 'en' lists English surface forms that all mean the same thing. Whitespace and straight-vs-curly apostrophes are handled for you; case is ignored. Word order and tense are NOT guessed, so spell out the variants you want to catch.",
+    "2. 'hi' is the replacement. It is dropped verbatim into the slot the placeholder left, so it must read correctly in that position.",
+    "3. 'span' is the real decision. The translator inflects the words AROUND the placeholder and, having no noun to agree with, assumes masculine-singular. So: use span 'clause' (mask a whole clause) whenever the Hindi is a predicate or is feminine, and reserve span 'phrase' for short reusable entries whose Hindi is masculine or invariant.",
+    "4. 'sample' MUST be the real full sentence the idiom appeared in, never a trimmed version of it. The translator builds a different frame around the placeholder depending on the rest of the sentence, so a short sample can pass while the real line breaks. This is not hypothetical: a bare 'on parade' entry verified clean against a trimmed sample and then produced 'नुमाइश पर की' in the actual talk.",
+    "5. Run `python verify.py` after adding anything. It puts every entry through the real translator and flags a splice that came out wrong. Do not trust an entry you have not verified.",
+    "6. Adding an entry needs no code change. This file is data."
+  ],
+  "entries": [
+    {
+      "id": "blood-run-from-face",
+      "en": [
+        "you can see the blood run from their face",
+        "you can see the blood drain from their face",
+        "you could see the blood run from their face"
+      ],
+      "hi": "आप देख सकते हैं कि उनके चेहरे का रंग उड़ जाता है",
+      "span": "clause",
+      "sense": "they go pale with dread at the news",
+      "sample": "You say you work in education, you can see the blood run from their face.",
+      "source": "ken-robinson-iG9CE55wbtY"
+    },
+    {
+      "id": "brownie-points-clause",
+      "en": [
+        "who gets all the brownie points"
+      ],
+      "hi": "शाबाशी किसे मिलती है",
+      "span": "clause",
+      "sense": "who collects all the credit and approval",
+      "sample": "Who gets all the brownie points, who are the winners.",
+      "source": "ken-robinson-iG9CE55wbtY"
+    },
+    {
+      "id": "brownie-points",
+      "en": [
+        "brownie points"
+      ],
+      "hi": "नंबर",
+      "span": "phrase",
+      "sense": "informal credit earned for pleasing someone; masculine so the frame agrees",
+      "sample": "He only did it to score brownie points with the boss.",
+      "source": "ken-robinson-iG9CE55wbtY"
+    },
+    {
+      "id": "high-water-mark",
+      "en": [
+        "the high-water mark",
+        "the high water mark"
+      ],
+      "hi": "सर्वोच्च शिखर",
+      "span": "phrase",
+      "sense": "the peak, the highest point ever reached. Deliberately masculine: the feminine पराकाष्ठा makes the translator emit 'के पराकाष्ठा' instead of 'की'.",
+      "sample": "We shouldn't hold them up as the high-water mark of all human achievement.",
+      "source": "ken-robinson-iG9CE55wbtY"
+    },
+    {
+      "id": "old-chestnut",
+      "en": [
+        "that old chestnut",
+        "the old chestnut"
+      ],
+      "hi": "वो घिसी-पिटी बात",
+      "span": "phrase",
+      "sense": "a joke or story told so often it has gone stale",
+      "sample": "Remember that old chestnut?",
+      "source": "ken-robinson-iG9CE55wbtY"
+    },
+    {
+      "id": "give-me-a-break",
+      "en": [
+        "give me a break"
+      ],
+      "hi": "थोड़ा चैन से रहने दो",
+      "span": "clause",
+      "sense": "stop bothering me, let me be",
+      "sample": "Terry, please, I'm trying to fry an egg in here. Give me a break.",
+      "source": "ken-robinson-iG9CE55wbtY"
+    },
+    {
+      "id": "off-the-beat",
+      "en": [
+        "off the beat"
+      ],
+      "hi": "ताल से बाहर",
+      "span": "phrase",
+      "sense": "out of time with the music. The literal reading turns 'beat' into a heartbeat.",
+      "sample": "Grown men and women writhing uncontrollably, off the beat.",
+      "source": "ken-robinson-iG9CE55wbtY"
+    },
+    {
+      "id": "live-in-their-heads",
+      "en": [
+        "they live in their heads"
+      ],
+      "hi": "वो अपने ही ख़यालों में जीते हैं",
+      "span": "clause",
+      "sense": "they are lost in thought, disconnected from their bodies. The literal version also flips the pronoun, making them live inside SOMEONE ELSE's head.",
+      "sample": "Not all of them, but typically, they live in their heads.",
+      "source": "ken-robinson-iG9CE55wbtY"
+    },
+    {
+      "id": "hopeless-at-school",
+      "en": [
+        "she was really hopeless",
+        "she was completely hopeless"
+      ],
+      "hi": "वो पढ़ाई में बिल्कुल फिसड्डी थी",
+      "span": "clause",
+      "sense": "she was very bad at schoolwork. The literal Hindi says she FELT hopeless, which is the wrong sense entirely.",
+      "sample": "When she was at school, she was really hopeless.",
+      "source": "ken-robinson-iG9CE55wbtY"
+    },
+    {
+      "id": "grow-out-of-creativity",
+      "en": [
+        "we grow out of it"
+      ],
+      "hi": "हम उसे खोते चले जाते हैं",
+      "span": "clause",
+      "sense": "we lose it as we get older. The literal Hindi ('we grow outside of it') is nonsense.",
+      "sample": "We don't grow into creativity, we grow out of it.",
+      "source": "ken-robinson-iG9CE55wbtY"
+    },
+    {
+      "id": "expertise-on-parade",
+      "en": [
+        "all the expertise that's been on parade for the past four days"
+      ],
+      "hi": "पिछले चार दिनों से सामने रखी गई तमाम विशेषज्ञता",
+      "span": "clause",
+      "sense": "all the expertise that has been on display. Narrow on purpose: a bare 'on parade' entry was tried and REMOVED. Google treats the placeholder as a noun modifier here and emits 'X की विशेषज्ञता', so every short splice produced the broken 'नुमाइश पर की'. A literal parade is also a real sense of the phrase, so the short form was wrong more often than right. A narrow entry that is correct beats a broad one that is not.",
+      "sample": "Nobody has a clue, despite all the expertise that's been on parade for the past four days, what the world will look like in five years' time.",
+      "source": "ken-robinson-iG9CE55wbtY"
+    },
+    {
+      "id": "have-a-go",
+      "en": [
+        "they'll have a go",
+        "they will have a go"
+      ],
+      "hi": "वो कोशिश कर ही डालते हैं",
+      "span": "clause",
+      "sense": "they will give it a try anyway. The literal Hindi turns a willing attempt into an obligation ('they will HAVE TO try').",
+      "sample": "If they don't know, they'll have a go.",
+      "source": "ken-robinson-iG9CE55wbtY"
+    },
+    {
+      "id": "take-a-chance",
+      "en": [
+        "kids will take a chance",
+        "children will take a chance"
+      ],
+      "hi": "बच्चे रिस्क ले ही लेते हैं",
+      "span": "clause",
+      "sense": "kids are willing to risk being wrong. The literal Hindi reads as taking an opportunity, which loses the risk.",
+      "sample": "What these things have in common is that kids will take a chance.",
+      "source": "ken-robinson-iG9CE55wbtY"
+    },
+    {
+      "id": "pin-you-to-the-wall",
+      "en": [
+        "they pin you to the wall"
+      ],
+      "hi": "वो आपको सवालों से घेर लेते हैं",
+      "span": "clause",
+      "sense": "they corner you and press you hard about it",
+      "sample": "But if you ask about their education, they pin you to the wall.",
+      "source": "ken-robinson-iG9CE55wbtY"
+    }
+  ]
+}
