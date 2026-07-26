@@ -39,6 +39,8 @@ from __future__ import annotations
 import json
 import os
 import re
+import time
+import urllib.error
 import urllib.request
 
 # ============================================================================
@@ -117,7 +119,18 @@ _SYS = (
     "4. Do NOT add greetings, filler, or words like 'यार' that aren't in the English.\n"
     "5. Write ONLY Devanagari — no Latin letters, no romanisation in brackets.\n"
     "6. Return the SAME line numbers, one rewritten line each, same count, "
-    "and NOTHING else."
+    "and NOTHING else.\n"
+    "\n"
+    "OUTPUT FORMAT — this matters. Give the number, then ONLY the rewritten "
+    "Hindi. Never repeat the English, and never repeat the 'EN:' / 'HI:' labels.\n"
+    "Example input:\n"
+    "1. EN: So the first step is to understand your audience. | "
+    "HI: तो पहला कदम अपने दर्शकों को समझना है।\n"
+    "2. EN: If you found this video helpful, please subscribe. | "
+    "HI: अगर आपको यह वीडियो उपयोगी लगा, तो कृपया सब्सक्राइब करें।\n"
+    "Example output:\n"
+    "1. तो पहला स्टेप है अपनी ऑडियंस को समझना।\n"
+    "2. अगर आपको ये वीडियो हेल्पफुल लगा, तो प्लीज़ सब्सक्राइब करें।"
 )
 
 # Collapse junk before it reaches a model or the TTS: a caption like
@@ -139,59 +152,144 @@ _NUM_RE = re.compile(r"^\s*(\d+)[.)]\s*(.*)$")
 
 
 def _parse_numbered(reply: str, n: int) -> list[str] | None:
-    """Recover lines by their number. None if the shape is wrong (missing/extra),
-    so the caller can fall back safely instead of shipping a misaligned dub."""
+    """Recover lines by their number. None if the shape is wrong (missing, extra,
+    or an echo), so the caller can retry instead of shipping a misaligned dub.
+
+    An echo is REJECTED, not repaired. This code used to strip everything before
+    the last "HI:" so that an echoed "1. EN: … | HI: …" still yielded the draft —
+    which meant a model that simply copied the prompt back scored as a success and
+    the whole restyle became a silent no-op. Better to fail and retry.
+    """
     got: dict[int, str] = {}
     for raw in reply.splitlines():
         m = _NUM_RE.match(raw)
         if m:
             content = m.group(2).strip()
-            # The model sometimes echoes our "EN: ... | HI:" scaffold back. Keep
-            # only what follows the last "HI:" so the label never reaches TTS.
-            if "HI:" in content:
-                content = content.rsplit("HI:", 1)[-1].strip()
+            if "EN:" in content or "HI:" in content:
+                return None                 # echoed the scaffold: no work was done
             got[int(m.group(1))] = content
     if len(got) != n or set(got) != set(range(1, n + 1)):
         return None
     return [got[i] for i in range(1, n + 1)]
 
 
-def _call_ollama(english: list[str], hindi: list[str], model: str,
-                 host: str) -> list[str] | None:
-    body = json.dumps({
+class HinglishUnavailable(Exception):
+    """The Hinglish pass could not run. Raised rather than swallowed: Hinglish is
+    something the person explicitly asked for, so quietly serving them formal
+    Hindi instead is a worse outcome than stopping and saying why."""
+
+
+def _chat(user: str, model: str, host: str, timeout: int = 300,
+          keep_alive: str | int | None = None) -> str:
+    """Talk to Ollama and return the reply text. Transport only — no parsing —
+    so that 'the server is broken' and 'the answer had the wrong shape' stay
+    distinguishable, which matters when deciding whether a retry is worth it."""
+    payload = {
         "model": model,
         "stream": False,
-        "options": {"temperature": 0},   # deterministic: same input -> same output
+        "options": {"temperature": 0,    # deterministic: same input -> same output
+                    # Room for the batch: ~40 numbered EN/HI pairs plus the reply.
+                    # Ollama's default context is far smaller, and a truncated
+                    # prompt comes back with the wrong number of lines.
+                    "num_ctx": 8192},
         "messages": [
             {"role": "system", "content": _SYS},
-            {"role": "user", "content": "Rewrite each line:\n" + _number_pairs(english, hindi)},
+            {"role": "user", "content": user},
         ],
-    }).encode()
+    }
+    if keep_alive is not None:
+        payload["keep_alive"] = keep_alive
+    body = json.dumps(payload).encode()
     req = urllib.request.Request(host.rstrip("/") + "/api/chat", data=body,
                                  headers={"Content-Type": "application/json"})
     try:
-        with urllib.request.urlopen(req, timeout=300) as r:
-            reply = json.load(r)["message"]["content"]
-    except Exception:
-        return None
-    return _parse_numbered(reply, len(hindi))
+        with urllib.request.urlopen(req, timeout=timeout) as r:
+            return json.load(r)["message"]["content"]
+    except urllib.error.HTTPError as e:
+        detail = e.read().decode("utf-8", "replace")[:300]
+        raise HinglishUnavailable(f"Ollama returned HTTP {e.code}: {detail}") from e
+    except urllib.error.URLError as e:
+        raise HinglishUnavailable(
+            f"Can't reach Ollama at {host} ({e.reason}). Is it running?") from e
+    except Exception as e:
+        raise HinglishUnavailable(f"{type(e).__name__}: {e}") from e
+
+
+def _call_ollama(english: list[str], hindi: list[str], model: str,
+                 host: str) -> list[str]:
+    """One batched call, parsed back into the same number of lines."""
+    reply = _chat("Rewrite each line:\n" + _number_pairs(english, hindi), model, host)
+    out = _parse_numbered(reply, len(hindi))
+    if out is None:
+        raise HinglishUnavailable(
+            f"The model returned the wrong number of lines (expected {len(hindi)}). "
+            "This usually means the batch was too large for its context window.")
+    return out
+
+
+def preflight(model: str = "gemma3:4b", host: str | None = None) -> None:
+    """Check Ollama is up and the model actually loads, BEFORE a dub spends
+    minutes transcribing. Failing in a few seconds beats failing at minute six.
+
+    Deliberately does NOT check the numbered-line contract: a one-line batch is
+    an odd shape for the model, and a strict check here would refuse to start a
+    dub that would have worked fine.
+
+    `keep_alive=0` matters: it tells Ollama to drop the model as soon as it has
+    answered. Otherwise the check itself leaves ~3 GB resident through the whole
+    transcription, and on a tight machine Whisper is then the thing that fails.
+    The two models take turns rather than competing.
+    """
+    host = host or os.environ.get("OLLAMA_HOST", "http://127.0.0.1:11434")
+    reply = _chat("Rewrite each line:\n1. EN: This is a test. | HI: यह एक परीक्षण है।",
+                  model, host, timeout=120, keep_alive=0)
+    if not reply.strip():
+        raise HinglishUnavailable("The model loaded but returned nothing.")
+
+
+# How many lines go in one call. A 20-minute talk is ~250 sentences; sending them
+# all at once was ~13k tokens, which overflows the context and comes back
+# unusable. Batches also mean a transient failure costs one batch, not the lot.
+BATCH = 40
 
 
 def restyle_offline(english_lines: list[str], hindi_lines: list[str], *,
-                    model: str = "gemma3:4b", host: str | None = None) -> list[str]:
-    """Dictionary swap + one batched Gemma pass that uses the English as ground
-    truth to FIX Google's mistranslations (not just restyle). Falls back to the
-    dictionary-swapped Hindi if Gemma is down or returns the wrong shape."""
+                    model: str = "gemma3:4b", host: str | None = None,
+                    on_progress=None, attempts: int = 3) -> list[str]:
+    """Dictionary swap + batched Gemma passes that use the English as ground truth
+    to FIX Google's mistranslations (not just restyle).
+
+    Raises HinglishUnavailable if a batch keeps failing after `attempts` tries.
+    It does NOT quietly return formal Hindi: this runs because the person asked
+    for Hinglish, and silently giving them something else is how a dub ends up
+    worse than expected with nothing on screen to say so.
+    """
     if not hindi_lines:
         return hindi_lines
     english = [_collapse_runs(e) for e in english_lines]
     swapped = [_collapse_runs(dict_pass(t)) for t in hindi_lines]
     host = host or os.environ.get("OLLAMA_HOST", "http://127.0.0.1:11434")
-    out = _call_ollama(english, swapped, model, host)
-    if out is None:
-        print("  [hinglish] Gemma unavailable/failed — using dictionary-only "
-              "Hinglish (accurate, slightly formal).")
-        return swapped
+
+    out: list[str] = []
+    batches = [(i, min(i + BATCH, len(swapped))) for i in range(0, len(swapped), BATCH)]
+    for n, (lo, hi) in enumerate(batches, 1):
+        if on_progress:
+            on_progress(n, len(batches))
+        last: Exception | None = None
+        for attempt in range(attempts):
+            try:
+                out += _call_ollama(english[lo:hi], swapped[lo:hi], model, host)
+                break
+            except HinglishUnavailable as e:
+                last = e
+                if attempt + 1 < attempts:
+                    # Most failures here are transient memory pressure: the model
+                    # can't load right now but will once something else lets go.
+                    time.sleep(2 * (attempt + 1))
+        else:
+            raise HinglishUnavailable(
+                f"Hinglish failed on lines {lo + 1}-{hi} after {attempts} tries. {last}")
+
     # Per-line guard: keep Gemma's line only if it's non-empty AND actually in
     # Devanagari — if it echoed English (no Devanagari), fall back to the draft.
     return [o if (o.strip() and re.search(r"[ऀ-ॿ]", o)) else s
@@ -202,7 +300,7 @@ def restyle_offline(english_lines: list[str], hindi_lines: list[str], *,
 # Public entry point — operates on dub.py's `groups` in place
 # ============================================================================
 def apply(groups: list[dict], *, model: str | None = None,
-          host: str | None = None) -> None:
+          host: str | None = None, on_progress=None) -> None:
     """Set each group's spoken text ("tr") to Hinglish.
 
     Expects the groups to already carry Google-Hindi in "tr" (dub.py runs its
@@ -212,7 +310,8 @@ def apply(groups: list[dict], *, model: str | None = None,
     if not groups:
         return
     out = restyle_offline([g["text"] for g in groups], [g["tr"] for g in groups],
-                          model=model or "gemma3:4b", host=host)
+                          model=model or "gemma3:4b", host=host,
+                          on_progress=on_progress)
     for g, t in zip(groups, out):
         g["tr"] = t
 

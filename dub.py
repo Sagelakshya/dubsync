@@ -123,15 +123,115 @@ def fetch_cues(vid: str) -> tuple[list[dict], bool | None]:
 
 # --- 2. regroup cues into sentence-sized chunks with a time window -----------
 _END = re.compile(r"[.!?।。？！]['\")\]]?\s*$")   # sentence enders (multi-script)
-def group_sentences(cues: list[dict],
-                    max_secs: float = 9.0, gap: float = 0.8) -> list[dict]:
-    """Merge fragmentary caption cues into whole sentences.
 
-    Auto-captions often split one sentence across several cues and carry no
-    punctuation at all — so we close a group on a sentence ender, OR on a real
-    pause between cues, OR once it's run long enough. That keeps chunks sensible
-    even for punctuation-free transcripts.
+# A sentence boundary anywhere in a body of text (ender + closing quote + space).
+_SENT_SPLIT = re.compile(r"""[.!?।。？！]['")\]]*(?:\s+|$)""")
+
+# Where it's acceptable to break a sentence that is simply too long to fit one
+# window. Clause boundaries only — never mid-phrase, and never mid-word.
+_CLAUSE_SPLIT = re.compile(r"(?:,|;|:|\s—|\s–)\s+|\s+(?:and|but|because|so|which|"
+                           r"that|when|where|while|if|although)\s+")
+
+
+def _char_times(cues: list[dict]) -> tuple[str, list[tuple[int, int, float, float]]]:
+    """Join every cue into one string, remembering which time each character
+    belongs to. Times inside a cue are interpolated across its characters — cues
+    are seconds long, so that lands a sentence boundary within a fraction of a
+    second of where it was actually spoken."""
+    parts, spans, pos = [], [], 0
+    for c in cues:
+        text = " ".join(c["text"].split())              # normalise whitespace
+        if not text:
+            continue
+        if parts:
+            parts.append(" ")
+            pos += 1
+        spans.append((pos, pos + len(text), c["start"], c["start"] + c["dur"]))
+        parts.append(text)
+        pos += len(text)
+    return "".join(parts), spans
+
+
+def _time_at(spans, index: int, end: bool = False) -> float:
+    """Time of the character at `index`, interpolated within its cue."""
+    for lo, hi, t0, t1 in spans:
+        if lo <= index < hi:
+            frac = (index - lo) / max(hi - lo, 1)
+            return t0 + (t1 - t0) * frac
+        if index < lo:                                  # landed in a joining space
+            return t0
+    return spans[-1][3] if spans else 0.0
+
+
+def _split_long(text: str, lo: int, hi: int, spans, max_secs: float) -> list[tuple[int, int]]:
+    """Break one over-long sentence at the clause boundary nearest its middle,
+    recursively, until each piece fits — or until there's nowhere left to break,
+    in which case it stays whole rather than being cut mid-phrase."""
+    if _time_at(spans, hi - 1, True) - _time_at(spans, lo) <= max_secs:
+        return [(lo, hi)]
+    mid = (lo + hi) // 2
+    best = None
+    for m in _CLAUSE_SPLIT.finditer(text, lo, hi):
+        if lo + 12 < m.end() < hi - 12:                 # don't strand a fragment
+            if best is None or abs(m.end() - mid) < abs(best - mid):
+                best = m.end()
+    if best is None:
+        return [(lo, hi)]
+    return (_split_long(text, lo, best, spans, max_secs)
+            + _split_long(text, best, hi, spans, max_secs))
+
+
+def group_sentences(cues: list[dict],
+                    max_secs: float = 14.0, gap: float = 0.8) -> list[dict]:
+    """Turn cues into WHOLE sentences, each with a time window.
+
+    Why it works this way: a translated line is only as good as the sentence it
+    sits in. Cutting "I've been blown away | by the whole thing" across two lines
+    makes the first half translate literally (someone physically blown away), and
+    that is the exact fault we removed at the transcript source by using Whisper
+    instead of auto-captions. So this never closes a line mid-sentence.
+
+    The text is stitched back into one string (remembering each character's time),
+    split on real sentence boundaries, and only then — if a single sentence still
+    runs longer than `max_secs` — broken at a clause boundary near its middle.
+
+    Auto-captions carry no punctuation at all, so if the transcript has almost no
+    sentence enders we fall back to the older time-and-pause chunking, which is
+    the right behaviour for that input.
     """
+    cues = [c for c in cues if c.get("text", "").strip()]
+    if not cues:
+        return []
+
+    text, spans = _char_times(cues)
+    bounds, start = [], 0
+    for m in _SENT_SPLIT.finditer(text):
+        bounds.append((start, m.end()))
+        start = m.end()
+    if start < len(text):
+        bounds.append((start, len(text)))
+
+    # Roughly one sentence per 8 seconds is normal speech; far fewer than that
+    # means the transcript is unpunctuated (auto-captions) and splitting on
+    # enders would produce a handful of enormous lines.
+    total = _time_at(spans, len(text) - 1, True) - _time_at(spans, 0)
+    if len(bounds) < max(2, total / 30):
+        return _group_by_time(cues, max_secs, gap)
+
+    groups: list[dict] = []
+    for lo, hi in bounds:
+        for a, b in _split_long(text, lo, hi, spans, max_secs):
+            chunk = text[a:b].strip()
+            if chunk:
+                groups.append({"text": chunk,
+                               "start": _time_at(spans, a),
+                               "end": _time_at(spans, b - 1, True)})
+    return groups
+
+
+def _group_by_time(cues: list[dict], max_secs: float, gap: float) -> list[dict]:
+    """The original chunker, kept for punctuation-free transcripts (auto-captions):
+    close a group on a sentence ender, a real pause, or once it has run long."""
     groups: list[dict] = []
     buf, start, last_end = [], None, None
     for c in cues:
@@ -592,6 +692,20 @@ def run_dub(args, progress=None) -> str:
 
     url = f"https://www.youtube.com/watch?v={vid}"
 
+    # Check the Hinglish model answers BEFORE spending minutes on transcription.
+    # Finding out at minute six that the feature you ticked can't run is the worst
+    # possible time to find out.
+    if args.hinglish:
+        say(1, "Checking the Hinglish model...")
+        try:
+            hinglish.preflight(model=args.hinglish_model or "gemma3:4b")
+        except hinglish.HinglishUnavailable as e:
+            raise DubError(
+                f"Hinglish is on, but the local model isn't available.\n{e}\n"
+                "Fix it (start Ollama, run 'ollama pull gemma3:4b', or close some "
+                "apps if it's out of memory) — or turn Hinglish off to dub in "
+                "regular Hindi.") from e
+
     with tempfile.TemporaryDirectory(prefix="dub_") as workdir:
         # Get the source media up front if we'll mux a video, or if Whisper needs it.
         video_path = args.video
@@ -640,7 +754,18 @@ def run_dub(args, progress=None) -> str:
         translate_groups(groups, args.lang)
         if args.hinglish:
             say(55, "Restyling to Hinglish (local Gemma)...")
-            hinglish.apply(groups, model=args.hinglish_model)
+            try:
+                hinglish.apply(
+                    groups, model=args.hinglish_model,
+                    on_progress=lambda d, t: say(55 + int(8 * d / t),
+                                                 f"  Hinglish batch {d}/{t}"))
+            except hinglish.HinglishUnavailable as e:
+                # Deliberately fatal. Hinglish was asked for; handing back formal
+                # Hindi under a green "Done" is a silent downgrade nobody sees.
+                raise DubError(
+                    f"The Hinglish pass failed part-way through.\n{e}\n"
+                    "Nothing was written. Free some memory and run it again, or "
+                    "turn Hinglish off to dub in regular Hindi.") from e
 
         say(65, "Generating voice...")
         # Per-line ticks: TTS is the step where a long video sits longest, so the
