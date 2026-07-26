@@ -1,5 +1,11 @@
 # dubsync — dub a YouTube video into another language, in sync
 
+**[Download for Windows](https://github.com/Sagelakshya/dubsync/releases/latest)** — one zip, nothing
+to install. Extract it, double-click `Start dubsync.cmd`, and the app opens in your browser. Its own
+Python, ffmpeg and the speech model's runtime are all inside the folder.
+
+Or run it from source, as below.
+
 Runs entirely on your own machine. Two ways in:
 
 - **The app (recommended):** double-click **`run.cmd`**. Your browser opens with

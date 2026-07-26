@@ -189,7 +189,11 @@ if (-not $SkipZip) {
     Step "Zipping"
     $zip = Join-Path $Build "dubsync-portable-win64.zip"
     if (Test-Path $zip) { Remove-Item $zip -Force }
-    Compress-Archive -Path $App -DestinationPath $zip -CompressionLevel Optimal
+    # NOT Compress-Archive: it buffers in memory and dies with OutOfMemoryException
+    # on a folder this size (700 MB). CreateFromDirectory streams to disk.
+    Add-Type -AssemblyName System.IO.Compression.FileSystem
+    [System.IO.Compression.ZipFile]::CreateFromDirectory(
+        $App, $zip, [System.IO.Compression.CompressionLevel]::Optimal, $true)
     $zipMB = [math]::Round(((Get-Item $zip).Length / 1MB), 1)
     Write-Host "`nBuilt $zip  ($zipMB MB)" -ForegroundColor Green
 } else {

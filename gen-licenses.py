@@ -73,7 +73,9 @@ def collect(site: str) -> list[dict]:
     return pkgs
 
 
-_LIC_RE = re.compile(r"(LICEN[CS]E|COPYING|NOTICE|AUTHORS)", re.I)
+# Name starts like a license file, but never a source file: PyAV ships an
+# AUTHORS.py that generates its authors list, which is code, not a licence.
+_LIC_RE = re.compile(r"(LICEN[CS]E|COPYING|NOTICE|AUTHORS)(?!.*\.(py|pyc)$)", re.I)
 
 
 def _top_level_dirs(info: str) -> list[str]:
