@@ -1,25 +1,38 @@
 # dubsync — dub a YouTube video into another language, in sync
 
-**[Download for Windows](https://github.com/Sagelakshya/dubsync/releases/latest)** — one zip, nothing
-to install. Extract it, double-click `Start dubsync.cmd`, and the app opens in your browser. Its own
-Python, ffmpeg and the speech model's runtime are all inside the folder.
+Paste a YouTube link, pick a language, get back a dub whose voice stays **in time with the
+picture**. Everything runs on your own machine: no account, no API keys, nothing uploaded
+but the video request itself.
 
-Or run it from source, as below.
+![The dubsync app: a link, a few options, live progress, and the finished dub](docs/screenshot.png)
 
-Runs entirely on your own machine. Two ways in:
+## Get it (Windows)
 
-- **The app (recommended):** double-click **`run.cmd`**. Your browser opens with
-  the dubber: paste a YouTube link, pick a language and a couple of options, watch
-  it work, download the dubbed file. Same page also turns any pasted script into
-  an `.mp3`.
-- **The command line:** double-click **`dub.cmd`** (it asks the same questions in
-  a console), or drive `dub.py` with flags for the finer knobs — every option in
-  this README.
+**→ [Download the latest release](https://github.com/Sagelakshya/dubsync/releases/latest)** and grab
+**`dubsync-portable-win64.zip`** (about 260 MB).
 
-Either way the first run sets itself up automatically, and the translated voice
-stays **in sync with the picture** — that's the point of the tool. It
-**transcribes the audio itself** (Whisper) for an accurate script rather than
-trusting error-prone auto-captions.
+1. Extract the zip anywhere (Downloads is fine).
+2. Double-click **`Start dubsync.cmd`**. Your browser opens the app.
+3. Paste a link, pick a language, press **Start dubbing**.
+
+There is nothing to install: the folder carries its own Python, ffmpeg, and the speech-recognition
+runtime. The first dub also downloads the Whisper model (about 0.5 GB, once). Windows 64-bit only.
+
+> **Not the green "Code → Download ZIP" button.** That gives you the source without Python, ffmpeg or
+> the model runtime, and it will not run by double-clicking. Use the release zip above, or follow the
+> from-source setup below if you actually want to work on the code.
+
+If Windows SmartScreen warns about the `.cmd` file, click *More info* then *Run anyway*. A `.cmd` is a
+plain text file — open it in Notepad and read it first if you like.
+
+---
+
+Running from source instead? Two ways in, once you've done the [setup](#setup-one-time):
+
+- **The app:** double-click **`run.cmd`** (the release's `Start dubsync.cmd` does the same thing
+  without needing Python installed).
+- **The command line:** double-click **`dub.cmd`** for the same questions in a console, or drive
+  `dub.py` with flags for the finer knobs — every option is documented below.
 
 ## The app
 `run.cmd` starts a small local web server and opens `http://127.0.0.1:5000`.
