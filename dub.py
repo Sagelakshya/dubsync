@@ -607,7 +607,18 @@ def run_dub(args, progress=None) -> str:
                 media = download_audio(url, workdir)
             say(10, f"Transcribing with Whisper ({args.whisper_model}; "
                     "the first run loads the model)...")
-            cues = transcribe.transcribe(media, model_size=args.whisper_model, lang="en")
+            # Long audio is transcribed in chunks; report them, because this is the
+            # step a long video sits in longest (10 -> 38% of the bar).
+            try:
+                cues = transcribe.transcribe(
+                    media, model_size=args.whisper_model, lang="en",
+                    on_progress=lambda d, t: say(10 + int(28 * d / t),
+                                                 f"  transcribing part {d}/{t}"))
+            except MemoryError as e:
+                raise DubError(str(e)) from e     # already a plain-English message
+            finally:
+                # Hand the memory back before the Hinglish model and ffmpeg want it.
+                transcribe.release()
             if not cues:
                 raise DubError("Whisper found no speech (silent or music-only audio?).")
         else:
