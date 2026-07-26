@@ -1,32 +1,35 @@
-# YouTube Transcript Translator + Video Dubber
+# dubsync — dub a YouTube video into another language, in sync
 
 Runs entirely on your own machine. Two ways in:
 
-- **Dub a video (one click):** double-click **`dub.cmd`**, paste a YouTube link,
-  answer a few questions (language, and for Hindi whether you want natural
-  **Hinglish**), and get back a `dubbed.mp4` whose translated voice stays in sync
-  with the picture. It **transcribes the audio itself** (Whisper) for an accurate
-  script, rather than trusting error-prone auto-captions. First run sets itself up
-  automatically. ffmpeg is bundled — no installs, no PATH fiddling.
-- **Translate captions (web app):** double-click **`run.cmd`** for a browser page
-  that shows the original + translation side by side, reads it aloud, and turns any
-  pasted text into speech.
+- **The app (recommended):** double-click **`run.cmd`**. Your browser opens with
+  the dubber: paste a YouTube link, pick a language and a couple of options, watch
+  it work, download the dubbed file. Same page also turns any pasted script into
+  an `.mp3`.
+- **The command line:** double-click **`dub.cmd`** (it asks the same questions in
+  a console), or drive `dub.py` with flags for the finer knobs — every option in
+  this README.
 
-The rest of this file explains both in detail.
+Either way the first run sets itself up automatically, and the translated voice
+stays **in sync with the picture** — that's the point of the tool. It
+**transcribes the audio itself** (Whisper) for an accurate script rather than
+trusting error-prone auto-captions.
 
-## What it does
-1. Reads the **captions** of a YouTube video (works for any video that has
-   captions — including YouTube's auto-generated ones).
-2. Translates them into the language you choose, using free Google Translate.
-3. Shows the original and the translation side by side in your browser.
-4. **Read aloud:** click the speaker button to hear the translation in a natural
-   voice (free Microsoft Edge voices) and download it as an `.mp3`.
+## The app
+`run.cmd` starts a small local web server and opens `http://127.0.0.1:5000`.
+Two tabs:
 
-You can also skip YouTube entirely: scroll down to **"Or paste your own script"**,
-type or paste any text, pick a language/voice, and generate an `.mp3` directly.
+1. **Dub a video** — link + language + options → live progress → download.
+   Options are the ones that matter: natural **Hinglish** (Hindi only),
+   transcript source (Whisper or captions), and footage type (talking head /
+   no faces / audio only). A dub takes minutes, so it runs in the background and
+   the page shows the stage it's on, the log, and elapsed time. Finished files
+   also land in the app's `dubs\` folder.
+2. **Text → speech** — paste any script, optionally translate it first, pick a
+   voice (male/female per language) and a speed, get an `.mp3`. No video needed.
 
-> It uses captions only — it does **not** download or watch the video. If a
-> video has captions completely disabled, there's nothing to translate.
+Nothing leaves your machine except the translation/voice calls the tool has always
+made (Google Translate, Microsoft Edge voices) and the video download itself.
 
 ## Setup (one time)
 
@@ -45,15 +48,10 @@ pip install -r requirements.txt
 python app.py
 ```
 
-**For the synced dub (`dub.py`) you also need ffmpeg.** The web app above doesn't
-need it, but `dub.py` does. Get it working one of three ways: install ffmpeg and
-add it to your PATH; drop `ffmpeg.exe` + `ffprobe.exe` into an `ffmpeg\bin` folder
-next to `dub.py`; or set an `FFMPEG_DIR` environment variable to the folder that
-holds them. `dub.py` runs from the same venv: `.venv\Scripts\python.exe dub.py ...`
-
-## Use it
-Once it's running, open **http://127.0.0.1:5000** in your browser.
-Paste a link, choose a language, click **Translate**. Use **Copy** to grab the text.
+**Dubbing needs ffmpeg.** (Text → speech and caption translation don't.) Get it
+working one of three ways: install ffmpeg and add it to your PATH; drop
+`ffmpeg.exe` + `ffprobe.exe` into an `ffmpeg\bin` folder next to `dub.py`; or set
+an `FFMPEG_DIR` environment variable to the folder that holds them.
 
 Stop the app with **Ctrl+C** in the terminal window.
 
@@ -62,11 +60,12 @@ Stop the app with **Ctrl+C** in the terminal window.
 - Free Google Translate quality is good, not perfect.
 - Everything runs locally; nothing is stored.
 
-## Synced dub (`dub.py`) — translated voiceover that matches the video
+## Synced dub (`dub.py`) — the engine, on the command line
 
-The web app reads captions as one flat block, so its `.mp3` doesn't line up with
-the video. `dub.py` fixes that: it keeps every caption's timestamp and produces a
-translated voiceover **synced to the video timeline**.
+The app drives `dub.py`; these are the same runs with the finer knobs exposed.
+It keeps every sentence's timestamp and produces a translated voiceover **synced
+to the video timeline**. Run it from the same venv:
+`.venv\Scripts\python.exe dub.py ...`
 
 ```bash
 # audio only — a dubbed.mp3 that lines up when played alongside the video
@@ -120,21 +119,19 @@ otherwise (slower on long videos, but it always works).
 
 `--hinglish` makes the Hindi dub sound like a real Indian YouTuber (Hindi grammar
 with the English words people actually say — बिज़नेस, ऑनलाइन, प्रॉब्लम) instead of
-stiff *shuddh* Hindi. Two backends:
+stiff *shuddh* Hindi. It runs **locally and free** — no API key, no usage limit.
 
 ```bash
-# local, free, offline — needs Ollama + a GPU on this PC
 .venv\Scripts\python.exe dub.py VIDEO_ID --lang hi --hinglish
 #   setup: install Ollama (ollama.com), then:  ollama pull gemma3:4b
-
-# Sarvam API — best quality, no GPU; needs a free key
-set SARVAM_API_KEY=your_key      # get one at dashboard.sarvam.ai
-.venv\Scripts\python.exe dub.py VIDEO_ID --lang hi --hinglish --hinglish-engine sarvam
 ```
 
-For a teammate on a laptop **without** a GPU, the Sarvam engine is the easy path
-(just a key). If either backend is unavailable at run time, the dub still succeeds
-in accurate (slightly more formal) Hindi rather than failing.
+How it works: a deterministic dictionary swaps the words that always swap
+(व्यवसाय→बिज़नेस), then a local Gemma-3-4B pass fixes the rest in one batched call.
+The model only *restyles* Hindi that Google already translated — it never
+translates from scratch, which is where small models invent words. Uses the GPU if
+you have one, CPU otherwise. If Ollama isn't running the dub still succeeds, in
+accurate (slightly more formal) Hindi rather than failing.
 
 - **Dense speech:** effectively perfect — a 14-min talk to Spanish held under ~1s
   drift with the final line dead on time; every line lands on its caption time.

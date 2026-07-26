@@ -12,3 +12,9 @@ runtime/
 dubbed.mp4
 dubbed.mp3
 *.tmp
+
+# Portable build output
+build/
+
+# Dubs made by the app
+dubs/

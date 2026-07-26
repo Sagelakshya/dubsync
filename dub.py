@@ -43,7 +43,7 @@ from concurrent.futures import ThreadPoolExecutor
 
 # Reuse the language/voice tables app.py already curates so the two stay in sync.
 from app import LANGUAGES, VOICES, yt_id
-import hinglish     # optional Hinglish restyle (local Gemma) / Sarvam API backend
+import hinglish     # optional Hinglish restyle (local Gemma via Ollama)
 import transcribe   # Whisper transcription (the trustworthy transcript source)
 
 # --- locate ffmpeg/ffprobe (portable: env var -> local folder -> PATH) -------
@@ -76,6 +76,12 @@ FFMPEG_DIR = os.path.dirname(FFMPEG)             # for yt-dlp's merge step
 # Audio format every intermediate clip is normalised to, so ffmpeg's concat
 # demuxer can stitch them without re-encoding surprises.
 SR, AR_ARGS = 24000, ["-ac", "1", "-ar", "24000"]
+
+
+class DubError(Exception):
+    """A failure worth showing the person who asked for the dub (bad link, no
+    captions, silent audio...). Raised instead of sys.exit so the pipeline can be
+    called from a long-running process — the web GUI — without killing it."""
 
 
 # --- 1. fetch the transcript WITH timings ------------------------------------
@@ -165,11 +171,16 @@ def translate_groups(groups: list[dict], target: str) -> None:
 
 
 # --- 4. TTS each translated group into an mp3 (edge-tts, concurrent) ---------
-async def _synth_all(groups: list[dict], voice: str, workdir: str) -> None:
+async def _synth_all(groups: list[dict], voice: str, workdir: str,
+                     on_one=None) -> None:
+    """TTS every group. `on_one(done, total)` fires as each line lands, so a caller
+    with a progress bar (the web GUI) can show movement during the slowest step."""
     import edge_tts
     sem = asyncio.Semaphore(6)   # don't hammer Microsoft on long videos
+    done = 0
 
     async def one(i: int, text: str) -> None:
+        nonlocal done
         async with sem:
             buf = bytearray()
             async for part in edge_tts.Communicate(text, voice).stream():
@@ -177,6 +188,9 @@ async def _synth_all(groups: list[dict], voice: str, workdir: str) -> None:
                     buf.extend(part["data"])
         with open(os.path.join(workdir, f"raw{i}.mp3"), "wb") as f:
             f.write(bytes(buf))
+        done += 1
+        if on_one:
+            on_one(done, len(groups))
 
     await asyncio.gather(*(one(i, g["tr"]) for i, g in enumerate(groups)))
 
@@ -482,14 +496,10 @@ def _interactive_argv() -> list[str]:
     hinglish_argv: list[str] = []
     if lang == "hi":
         print("\nSpeak natural Hinglish (Hindi-English mix, like a real YouTuber)?")
-        print("  1) Yes - local Gemma   (free, offline; needs Ollama + a GPU on this PC)")
-        print("  2) Yes - Sarvam API    (best quality, no GPU; needs a SARVAM_API_KEY)")
-        print("  3) No  - pure Hindi")
-        hmode = input("Choose 1, 2 or 3 [default 1]:\n> ").strip() or "1"
-        if hmode == "1":
-            hinglish_argv = ["--hinglish", "--hinglish-engine", "ollama"]
-        elif hmode == "2":
-            hinglish_argv = ["--hinglish", "--hinglish-engine", "sarvam"]
+        print("  1) Yes - needs Ollama running on this PC (ollama pull gemma3:4b)")
+        print("  2) No  - pure Hindi")
+        if (input("Choose 1 or 2 [default 1]:\n> ").strip() or "1") == "1":
+            hinglish_argv = ["--hinglish"]
     print("\nTranscript source?")
     print("  1) Whisper           (transcribe the audio ourselves - accurate, recommended)")
     print("  2) YouTube captions  (faster, but auto-captions are often wrong)")
@@ -508,6 +518,164 @@ def _interactive_argv() -> list[str]:
         argv += ["--broll", "--download", "--out", "dubbed.mp4"]
     print()
     return argv
+
+
+# --- the whole pipeline, as one callable -------------------------------------
+# The CLI is not the only front door any more: the web GUI in app.py runs the
+# same job from a background thread. So the run lives in run_dub() and main() is
+# just argument parsing. Progress goes through a callback instead of print(),
+# because a browser needs to see the same stages a console does — a dub takes
+# minutes, and silence is indistinguishable from a hang.
+
+# Every knob run_dub understands, with the defaults the CLI advertises. options()
+# lets a non-CLI caller build a valid job without mirroring argparse's flag list.
+DEFAULTS = dict(
+    url="", lang="hi", out=None, video=None, download=False,
+    max_speed=1.5, hard_max=3.0, allow_drift=False, keep_original=0.0,
+    retime=False, max_video=1.25, smooth=False, faces=False, broll=False,
+    hinglish=False, hinglish_model=None, source="whisper", whisper_model="small",
+)
+
+
+def options(**over) -> argparse.Namespace:
+    """Build a run_dub() options object: the CLI defaults, plus any overrides."""
+    unknown = set(over) - set(DEFAULTS)
+    if unknown:
+        raise DubError(f"unknown option(s): {', '.join(sorted(unknown))}")
+    return argparse.Namespace(**{**DEFAULTS, **over})
+
+
+def _apply_presets(args) -> None:
+    """Footage presets set the retime knobs. An explicit --max-video still wins,
+    which is why each preset only fires when the value is still the default."""
+    if args.faces and args.broll:
+        raise DubError("Pick one of --faces / --broll, not both.")
+    if args.faces:
+        args.retime = True
+        if args.max_video == 1.25:
+            args.max_video = 1.1
+    if args.broll:
+        args.retime = True
+        args.smooth = True
+        if args.max_video == 1.25:
+            args.max_video = 1.6
+
+
+def run_dub(args, progress=None) -> str:
+    """Produce the dub described by `args` (see options()); return the output path.
+
+    `progress(pct, message)` is called at each stage — `pct` is a rough 0-100 for
+    a progress bar, `message` is the human line the CLI would have printed.
+    Raises DubError for anything the person asking can act on.
+    """
+    def say(pct: int | None, msg: str) -> None:
+        if progress:
+            progress(pct, msg)
+
+    _apply_presets(args)
+
+    vid = yt_id(args.url)
+    if not vid:
+        raise DubError("That doesn't look like a YouTube link or id.")
+    if args.lang not in dict((c, l) for l, c in LANGUAGES):
+        raise DubError(f"Unknown lang '{args.lang}'. Known: {', '.join(c for _, c in LANGUAGES)}")
+    if args.hinglish and args.lang != "hi":
+        raise DubError("Hinglish is Hindi-only; choose Hindi (or turn Hinglish off).")
+    voice = VOICES.get(args.lang, VOICES["en"])
+
+    # Decide up front whether we're producing a video (mux) or just audio.
+    out = args.out
+    want_video = bool(args.video) or args.download or args.retime or (
+        out is not None and out.lower().endswith(_VIDEO_EXTS))
+    if out is None:
+        out = "dubbed.mp4" if want_video else "dubbed.mp3"
+
+    url = f"https://www.youtube.com/watch?v={vid}"
+
+    with tempfile.TemporaryDirectory(prefix="dub_") as workdir:
+        # Get the source media up front if we'll mux a video, or if Whisper needs it.
+        video_path = args.video
+        if want_video and not video_path:
+            say(3, "Downloading video...")
+            video_path = download_video(url, workdir)
+
+        # Transcript source: Whisper (accurate, default) or YouTube captions (fast).
+        if args.source == "whisper":
+            media = video_path
+            if not media:
+                say(6, "Downloading audio...")
+                media = download_audio(url, workdir)
+            say(10, f"Transcribing with Whisper ({args.whisper_model}; "
+                    "the first run loads the model)...")
+            cues = transcribe.transcribe(media, model_size=args.whisper_model, lang="en")
+            if not cues:
+                raise DubError("Whisper found no speech (silent or music-only audio?).")
+        else:
+            say(10, "Fetching captions...")
+            cues, generated = fetch_cues(vid)
+            if not cues:
+                raise DubError("This video has no captions. Switch the transcript "
+                               "source to Whisper.")
+            if generated:
+                say(None, "  ! Heads-up: these are AUTO-GENERATED captions (often "
+                          "wrong). Whisper is more accurate.")
+        groups = group_sentences(cues)
+        say(40, f"  {len(cues)} segments -> {len(groups)} sentences")
+
+        # Translate, then (optionally) restyle. Hinglish is a *second pass* over
+        # Google's Hindi, never a translation of its own — the model only fixes
+        # register and wrong words, which is what keeps it from inventing meaning.
+        say(42, "Translating...")
+        translate_groups(groups, args.lang)
+        if args.hinglish:
+            say(55, "Restyling to Hinglish (local Gemma)...")
+            hinglish.apply(groups, model=args.hinglish_model)
+
+        say(65, "Generating voice...")
+        # Per-line ticks: TTS is the step where a long video sits longest, so the
+        # bar has to keep moving there or the page looks stuck.
+        asyncio.run(_synth_all(groups, voice, workdir,
+                               on_one=lambda d, t: say(65 + int(15 * d / t),
+                                                       f"  voice {d}/{t} lines")))
+
+        total = _dur(video_path) if video_path else None
+
+        if args.retime:
+            if not video_path:
+                raise DubError("Retiming needs the video: use a footage preset that "
+                               "downloads it, or pass a local file.")
+            say(82, "Retiming video to the voice (this re-encodes; be patient)...")
+            rv, ra, warns = build_retimed(
+                groups, workdir, video_path, args.max_speed, args.max_video,
+                args.smooth, total or 0.0)
+            say(94, "Muxing...")
+            _run(["-i", rv, "-i", ra, "-map", "0:v", "-map", "1:a",
+                  "-c:v", "copy", "-shortest", out])
+        else:
+            say(82, "Fitting to the timeline...")
+            joined, warns = build_timeline(
+                groups, workdir, args.max_speed, args.hard_max, args.allow_drift, total)
+            if video_path:
+                say(94, "Muxing onto the video...")
+                mux(video_path, joined, out, args.keep_original)
+            else:
+                say(94, "Writing the mp3...")
+                _run(["-i", joined, "-b:a", "160k", out])
+
+    # The sync trade-off, reported honestly: which lines had to hurry, and how far.
+    if warns and args.retime:
+        fastest = max(w["audio"] for w in warns)
+        say(None, f"Note: {len(warns)} line(s) expanded past both the audio and video caps; "
+                  f"audio took the remainder (up to {fastest:.2f}x) to keep the fit. "
+                  f"Loosen with --max-video / --max-speed, or --smooth for cleaner slow video.")
+    elif warns:
+        fastest = max(w["needed"] for w in warns)
+        mode = "let it drift" if args.allow_drift else f"sped up (capped at {args.hard_max:g}x)"
+        say(None, f"Note: {len(warns)} line(s) ran longer than their slot at a natural pace; "
+                  f"{mode} to keep sync (fastest needed {fastest:.2f}x). "
+                  f"Tighter sync vs. calmer voice is the --max-speed / --hard-max / --allow-drift trade.")
+    say(100, f"Done -> {out}")
+    return out
 
 
 def main() -> None:
@@ -541,13 +709,8 @@ def main() -> None:
                     help="preset for faceless footage (POV/gameplay/screencast): --retime --max-video 1.6 --smooth")
     ap.add_argument("--hinglish", action="store_true",
                     help="speak natural Hinglish (Hindi-English mix) instead of formal Hindi (--lang hi only)")
-    ap.add_argument("--hinglish-engine", choices=("ollama", "sarvam"), default="ollama",
-                    help="Hinglish backend: 'ollama' = local Gemma (free, offline, needs a GPU); "
-                         "'sarvam' = Sarvam API (best quality, no GPU, needs SARVAM_API_KEY)")
     ap.add_argument("--hinglish-model", default=None,
-                    help="override the model (default: gemma3:4b for ollama, mayura:v1 for sarvam)")
-    ap.add_argument("--sarvam-key", default=None,
-                    help="Sarvam API key (else read from the SARVAM_API_KEY env var)")
+                    help="override the Ollama model used for the Hinglish restyle (default gemma3:4b)")
     ap.add_argument("--source", choices=("whisper", "captions"), default="whisper",
                     help="transcript source: 'whisper' = transcribe the audio ourselves "
                          "(accurate, default); 'captions' = use YouTube captions (faster, "
@@ -556,116 +719,12 @@ def main() -> None:
                     help="faster-whisper model size: tiny/base/small/medium/large-v3 "
                          "(bigger = more accurate, slower; default small)")
     args = ap.parse_args(_interactive_argv() if interactive else None)
-
-    # Presets just set the retime knobs; an explicit --max-video still wins.
-    if args.faces and args.broll:
-        sys.exit("Pick one of --faces / --broll, not both.")
-    if args.faces:
-        args.retime = True
-        if args.max_video == 1.25:
-            args.max_video = 1.1
-    if args.broll:
-        args.retime = True
-        args.smooth = True
-        if args.max_video == 1.25:
-            args.max_video = 1.6
-
-    vid = yt_id(args.url)
-    if not vid:
-        sys.exit("That doesn't look like a YouTube link or id.")
-    if args.lang not in dict((c, l) for l, c in LANGUAGES):
-        sys.exit(f"Unknown lang '{args.lang}'. Known: {', '.join(c for _, c in LANGUAGES)}")
-    if args.hinglish and args.lang != "hi":
-        sys.exit("--hinglish is Hindi-only; use --lang hi (or drop --hinglish).")
-    voice = VOICES.get(args.lang, VOICES["en"])
-
-    # Decide up front whether we're producing a video (mux) or just audio.
-    out = args.out
-    want_video = bool(args.video) or args.download or args.retime or (
-        out is not None and out.lower().endswith(_VIDEO_EXTS))
-    if out is None:
-        out = "dubbed.mp4" if want_video else "dubbed.mp3"
-
-    url = f"https://www.youtube.com/watch?v={vid}"
-
-    with tempfile.TemporaryDirectory(prefix="dub_") as workdir:
-        # Get the source media up front if we'll mux a video, or if Whisper needs it.
-        video_path = args.video
-        if want_video and not video_path:
-            print("Downloading video...")
-            video_path = download_video(url, workdir)
-
-        # Transcript source: Whisper (accurate, default) or YouTube captions (fast).
-        if args.source == "whisper":
-            media = video_path
-            if not media:
-                print("Downloading audio...")
-                media = download_audio(url, workdir)
-            print(f"Transcribing with Whisper ({args.whisper_model}; first run loads the model)...")
-            cues = transcribe.transcribe(media, model_size=args.whisper_model, lang="en")
-            if not cues:
-                sys.exit("Whisper found no speech (silent or music-only audio?).")
-        else:
-            print("Fetching captions...")
-            cues, generated = fetch_cues(vid)
-            if not cues:
-                sys.exit("This video has no captions. Re-run with --source whisper.")
-            if generated:
-                print("  ! Heads-up: these are AUTO-GENERATED captions (often wrong). "
-                      "Re-run with --source whisper for accuracy.")
-        groups = group_sentences(cues)
-        print(f"  {len(cues)} segments -> {len(groups)} sentences")
-
-        # Translate. Hinglish has two backends: the Sarvam API goes English->Hinglish
-        # in one step (skip Google), while the local Gemma path restyles Google's Hindi.
-        if args.hinglish and args.hinglish_engine == "sarvam":
-            print("Translating to Hinglish (Sarvam API)...")
-            hinglish.apply(groups, engine="sarvam", api_key=args.sarvam_key,
-                           model=args.hinglish_model)
-        else:
-            print("Translating...")
-            translate_groups(groups, args.lang)
-            if args.hinglish:
-                print("Restyling to Hinglish (local Gemma)...")
-                hinglish.apply(groups, engine="ollama", model=args.hinglish_model)
-
-        print("Generating voice...")
-        asyncio.run(_synth_all(groups, voice, workdir))
-
-        total = _dur(video_path) if video_path else None
-
-        if args.retime:
-            if not video_path:
-                sys.exit("--retime needs the video: pass --video FILE or --download.")
-            print("Retiming video to the voice (this re-encodes; be patient)...")
-            rv, ra, warns = build_retimed(
-                groups, workdir, video_path, args.max_speed, args.max_video,
-                args.smooth, total or 0.0)
-            print("Muxing...")
-            _run(["-i", rv, "-i", ra, "-map", "0:v", "-map", "1:a",
-                  "-c:v", "copy", "-shortest", out])
-        else:
-            print("Fitting to the timeline...")
-            joined, warns = build_timeline(
-                groups, workdir, args.max_speed, args.hard_max, args.allow_drift, total)
-            if video_path:
-                print("Muxing onto the video...")
-                mux(video_path, joined, out, args.keep_original)
-            else:
-                _run(["-i", joined, "-b:a", "160k", out])
-
-    if warns and args.retime:
-        fastest = max(w["audio"] for w in warns)
-        print(f"Note: {len(warns)} line(s) expanded past both the audio and video caps; "
-              f"audio took the remainder (up to {fastest:.2f}x) to keep the fit. "
-              f"Loosen with --max-video / --max-speed, or --smooth for cleaner slow video.")
-    elif warns:
-        fastest = max(w["needed"] for w in warns)
-        mode = "let it drift" if args.allow_drift else f"sped up (capped at {args.hard_max:g}x)"
-        print(f"Note: {len(warns)} line(s) ran longer than their slot at a natural pace; "
-              f"{mode} to keep sync (fastest needed {fastest:.2f}x). "
-              f"Tighter sync vs. calmer voice is the --max-speed / --hard-max / --allow-drift trade.")
-    print(f"Done -> {out}")
+    try:
+        # On the console the percentage is noise — just print the same lines this
+        # tool always printed.
+        run_dub(args, progress=lambda pct, msg: print(msg))
+    except DubError as e:
+        sys.exit(str(e))
 
 
 if __name__ == "__main__":

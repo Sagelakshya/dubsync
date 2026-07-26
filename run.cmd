@@ -1,8 +1,9 @@
 @echo off
-REM One-click launcher.
+REM One-click launcher for the dubsync GUI (the front door: dub a video, or turn
+REM a script into speech, in the browser).
 REM   1) finds a usable Python 3.10+ (or installs it automatically the first time)
 REM   2) builds the app's own environment + installs deps on first run
-REM   3) starts the app
+REM   3) starts the app and opens http://127.0.0.1:5000
 setlocal enableextensions enabledelayedexpansion
 cd /d "%~dp0"
 
@@ -54,7 +55,7 @@ if not exist .venv (
 )
 
 echo.
-echo  App is starting. Open http://127.0.0.1:5000 in your browser.
+echo  dubsync is starting - your browser will open at http://127.0.0.1:5000
 echo  (Keep this window open. Press Ctrl+C here to stop.)
 echo.
 python app.py

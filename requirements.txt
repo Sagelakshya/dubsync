@@ -4,6 +4,5 @@ deep-translator>=1.11
 edge-tts>=6.1
 yt-dlp>=2024.1          # dub.py: download the source video/audio to mux the dub onto
 faster-whisper>=1.0     # dub.py: transcribe the audio ourselves (the default, trustworthy source)
-# Hinglish (--hinglish) is OPTIONAL and needs no pip deps here:
-#   - engine "ollama" (default): install Ollama + `ollama pull gemma3:4b` (offline, GPU)
-#   - engine "sarvam": set SARVAM_API_KEY (no GPU) — get a free key at dashboard.sarvam.ai
+# Hinglish (--hinglish) is OPTIONAL and needs no pip deps here — it runs on a
+# local model: install Ollama (ollama.com), then `ollama pull gemma3:4b`.

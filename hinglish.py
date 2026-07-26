@@ -1,4 +1,4 @@
-"""hinglish.py — produce natural spoken Hinglish for dub.py, two ways.
+"""hinglish.py — produce natural spoken Hinglish for dub.py, locally.
 
 Why this exists
 ---------------
@@ -8,29 +8,30 @@ speak Hinglish: Hindi grammar with the everyday English words mixed in
 (बिज़नेस, ऑनलाइन, वीडियो, प्रॉब्लम...). This module gives the dub that spoken
 register without changing the meaning, so it sounds like a person, not a textbook.
 
-Two backends (Sage05 wanted both — one for his GPU box, one to hand a teammate)
-------------------------------------------------------------------------------
-* "ollama"  — OFFLINE. Keeps dub.py's Google-Hindi, then restyles it locally:
-    1. a deterministic loanword DICTIONARY swaps the common formal words for the
-       English ones people say (no model, no VRAM, and the SAME word maps the
-       same way every time — an LLM won't guarantee that);
-    2. local Gemma-3-4B cleans up the rest, ALL lines in ONE batched call so a
-       100-sentence video is one round trip, not 100 (which on an 8 GB card is a
-       VRAM/uptime gamble). Gemma only *rewrites* correct Hindi — it never
-       translates from scratch, which is where small models invent words.
-  Free, private, but needs Ollama + a GPU.
+How it works — two layers, both offline
+---------------------------------------
+1. a deterministic loanword DICTIONARY swaps the common formal words for the
+   English ones people say (no model, no VRAM, and the SAME word maps the same
+   way every time — an LLM won't guarantee that);
+2. local Gemma-3-4B cleans up the rest, ALL lines in ONE batched call so a
+   100-sentence video is one round trip, not 100 (which on an 8 GB card is a
+   VRAM/uptime gamble). Gemma only *rewrites* correct Hindi — it never
+   translates from scratch, which is where small models invent words.
 
-* "sarvam" — API. Sends the ENGLISH line straight to Sarvam's translate endpoint
-  with mode="code-mixed" (a real, documented setting built for exactly this) and
-  gets Hinglish back in one call. Best quality, needs no GPU — just
-  SARVAM_API_KEY — so it's the portable option for a teammate's laptop. One call
-  per sentence (threaded), which keeps every line locked to its own timestamp.
+Free, private, unlimited; needs Ollama running (`ollama pull gemma3:4b`).
 
-Robustness: any backend failure degrades gracefully, per line — the ollama path
-falls back to the dictionary-swapped Hindi; the sarvam path falls back to plain
-Google Hindi. The dub is never allowed to crash over *style*.
+Why there is no API backend: a Sarvam `mode="code-mixed"` engine was built and
+tested live, then REMOVED (2026-07-26). Its code-mix is too aggressive — it
+transliterates words a Hindi speaker would keep in Hindi (एलिफ़ेंट्स, गाइज़,
+कूल), which reads as parody rather than speech. The local Gemma restyle is more
+natural, free, offline and unlimited, so it is the only path. Don't re-add an
+API here without a listening test against Gemma first.
 
-Both entry points operate on dub.py's `groups` list in place, setting each
+Robustness: failure degrades gracefully, per line — if Gemma is down or returns
+the wrong shape we fall back to the dictionary-swapped Hindi. The dub is never
+allowed to crash over *style*.
+
+The entry point operates on dub.py's `groups` list in place, setting each
 group's "tr" (the text that gets spoken) — so integration is a single call.
 """
 from __future__ import annotations
@@ -39,7 +40,6 @@ import json
 import os
 import re
 import urllib.request
-from concurrent.futures import ThreadPoolExecutor
 
 # ============================================================================
 # Layer 1 (offline path): deterministic loanword dictionary
@@ -199,97 +199,30 @@ def restyle_offline(english_lines: list[str], hindi_lines: list[str], *,
 
 
 # ============================================================================
-# Sarvam API backend: English -> Hinglish directly (mode="code-mixed")
-# ============================================================================
-_SARVAM_URL = "https://api.sarvam.ai/translate"
-
-
-def _call_sarvam(text: str, api_key: str, model: str, mode: str,
-                 output_script: str) -> str | None:
-    """One /translate call. Per Sarvam's contract: mayura:v1 max 1000 chars,
-    sarvam-translate:v1 max 2000. Returns translated_text, or None on failure."""
-    body = json.dumps({
-        "input": text[:1000] if model == "mayura:v1" else text[:2000],
-        "source_language_code": "auto" if model == "mayura:v1" else "en-IN",
-        "target_language_code": "hi-IN",
-        "mode": mode,                     # "code-mixed" == Hinglish
-        "model": model,
-        "output_script": output_script,   # "fully-native" -> Devanagari for the TTS voice
-    }).encode()
-    req = urllib.request.Request(_SARVAM_URL, data=body, headers={
-        "Content-Type": "application/json", "api-subscription-key": api_key})
-    try:
-        with urllib.request.urlopen(req, timeout=60) as r:
-            return json.load(r)["translated_text"]
-    except Exception:
-        return None
-
-
-def translate_sarvam(english_lines: list[str], *, api_key: str,
-                     model: str = "mayura:v1", mode: str = "code-mixed",
-                     output_script: str = "fully-native") -> list[str]:
-    """English -> Hinglish via Sarvam, one threaded call per sentence (keeps every
-    line locked to its timestamp). If a line fails, fall back to Google Hindi for
-    that line so the dub still speaks Hindi, never raw English."""
-    if not english_lines:
-        return english_lines
-    english_lines = [_collapse_runs(e) for e in english_lines]
-
-    def one(text: str) -> str:
-        r = _call_sarvam(text, api_key, model, mode, output_script)
-        if r:
-            return r
-        try:                              # per-line safety net: plain Google Hindi
-            from deep_translator import GoogleTranslator
-            return GoogleTranslator(source="auto", target="hi").translate(text) or text
-        except Exception:
-            return text
-
-    with ThreadPoolExecutor(max_workers=4) as pool:   # modest: respect API rate limits
-        return list(pool.map(one, english_lines))
-
-
-# ============================================================================
 # Public entry point — operates on dub.py's `groups` in place
 # ============================================================================
-def apply(groups: list[dict], *, engine: str = "ollama", model: str | None = None,
-          host: str | None = None, api_key: str | None = None,
-          mode: str = "code-mixed", output_script: str = "fully-native") -> None:
+def apply(groups: list[dict], *, model: str | None = None,
+          host: str | None = None) -> None:
     """Set each group's spoken text ("tr") to Hinglish.
 
-    engine="ollama": requires groups already carry Google-Hindi in "tr"
-                     (dub.py runs its translate step first); restyles that.
-    engine="sarvam": uses each group's original English "text"; dub.py should
-                     SKIP its Google translate step for this engine.
+    Expects the groups to already carry Google-Hindi in "tr" (dub.py runs its
+    translate step first) and the English original in "text" — the restyle uses
+    the English as ground truth, so both are required.
     """
     if not groups:
         return
-    if engine == "ollama":
-        out = restyle_offline([g["text"] for g in groups], [g["tr"] for g in groups],
-                              model=model or "gemma3:4b", host=host)
-    elif engine == "sarvam":
-        key = api_key or os.environ.get("SARVAM_API_KEY")
-        if not key:
-            raise SystemExit(
-                "hinglish engine 'sarvam' needs an API key: set SARVAM_API_KEY "
-                "(get one free at dashboard.sarvam.ai — ~65 short videos of free "
-                "credit) or pass --sarvam-key.")
-        out = translate_sarvam([g["text"] for g in groups], api_key=key,
-                               model=model or "mayura:v1", mode=mode,
-                               output_script=output_script)
-    else:
-        raise ValueError(f"unknown hinglish engine '{engine}' (use ollama|sarvam)")
+    out = restyle_offline([g["text"] for g in groups], [g["tr"] for g in groups],
+                          model=model or "gemma3:4b", host=host)
     for g, t in zip(groups, out):
         g["tr"] = t
 
 
 # ============================================================================
-# self-test:  python hinglish.py [ollama|sarvam]
+# self-test:  python hinglish.py
 # ============================================================================
 if __name__ == "__main__":
     import sys
     sys.stdout.reconfigure(encoding="utf-8")        # Windows console is cp1252
-    eng = sys.argv[1] if len(sys.argv) > 1 else "ollama"
     # groups mimic dub.py: "text" = original English, "tr" = Google Hindi.
     groups = [
         {"text": "Today I want to talk about how you can grow your business online without spending too much money on ads.",
@@ -302,7 +235,7 @@ if __name__ == "__main__":
     print("--- dictionary pass only ---")
     for g in groups:
         print(dict_pass(g["tr"]))
-    print(f"\n--- full pipeline (engine={eng}) ---")
-    apply(groups, engine=eng)
+    print("\n--- full pipeline (dictionary + local Gemma) ---")
+    apply(groups)
     for g in groups:
         print(g["tr"])
