@@ -204,6 +204,12 @@ def _run_job(job_id: str, opts: dict) -> None:
             j["log"].append(msg.rstrip())
             del j["log"][:-300]                 # keep the tail, not the whole run
 
+    def transcript(rows) -> None:
+        # Arrives before the voice step, so the page can show the script while the
+        # audio is still rendering.
+        with LOCK:
+            JOBS[job_id]["transcript"] = rows
+
     try:
         import dub
     except SystemExit as e:                     # ffmpeg missing -> dub.py sys.exits
@@ -214,7 +220,8 @@ def _run_job(job_id: str, opts: dict) -> None:
     with LOCK:
         JOBS[job_id].update(status="running", message="Starting...")
     try:
-        dub.run_dub(dub.options(**opts), progress=progress)
+        dub.run_dub(dub.options(**opts), progress=progress,
+                    on_transcript=transcript)
     except dub.DubError as e:
         return fail(str(e))
     except Exception as e:
@@ -260,7 +267,7 @@ def api_dub_start():
     job_id = uuid.uuid4().hex[:12]
     with LOCK:
         JOBS[job_id] = dict(id=job_id, status="queued", pct=0, message="Queued...",
-                            log=[], error=None, name=name,
+                            log=[], error=None, name=name, transcript=None,
                             path=opts["out"], started=time.time(), finished=None,
                             title=f"{name}  ({lang}{', Hinglish' if hing else ''}, {footage})")
     # daemon: closing the app shouldn't be blocked by a half-finished dub.
@@ -278,7 +285,24 @@ def api_dub_status(job_id: str):
         return jsonify(ok=True, status=j["status"], pct=j["pct"],
                        message=j["message"], error=j["error"], name=j["name"],
                        elapsed=elapsed, log=j["log"][-40:],
+                       # Only a flag here. The transcript can be hundreds of
+                       # sentences and this endpoint is polled every second.
+                       has_transcript=bool(j.get("transcript")),
                        ready=j["status"] == "done" and os.path.exists(j["path"]))
+
+
+@app.get("/api/dub/<job_id>/transcript")
+def api_dub_transcript(job_id: str):
+    """The dub's script: every sentence with its timestamps, the original English
+    and what was actually spoken. Fetched once, when the poll says it exists."""
+    with LOCK:
+        j = JOBS.get(job_id)
+        if not j:
+            return jsonify(ok=False, error="No such job."), 404
+        rows = j.get("transcript")
+    if not rows:
+        return jsonify(ok=False, error="The transcript isn't ready yet."), 404
+    return jsonify(ok=True, rows=rows, name=j["name"])
 
 
 @app.get("/api/dub/<job_id>/file")
@@ -398,6 +422,19 @@ PAGE = """<!doctype html>
   .hidden { display:none; }
   .hint { font-size:13px; color:var(--muted); margin:8px 2px 0; }
   audio, video { width:100%; margin-top:4px; border-radius:8px; }
+  /* transcript: the script of the dub that just ran, in sync order */
+  .tsc { max-height:430px; overflow:auto; background:#0b0d11;
+         border:1px solid var(--line); border-radius:8px; }
+  .tsc .t { display:grid; grid-template-columns:58px 1fr; gap:12px;
+            padding:9px 12px; border-bottom:1px solid var(--line); }
+  .tsc .t:last-child { border-bottom:0; }
+  .tsc .t.idm { border-left:2px solid var(--accent); padding-left:10px; }
+  .tsc .ts { color:var(--muted); font:12px/1.6 ui-monospace,Consolas,monospace; }
+  .tsc .en { color:var(--muted); font-size:13px; line-height:1.5; }
+  .tsc .hi { font-size:15px; line-height:1.6; margin-top:2px; }
+  .tsc .tag { display:inline-block; margin-top:5px; padding:1px 7px; font-size:11px;
+              color:var(--accent); border:1px solid var(--line); border-radius:6px; }
+  .tsc.noen .en { display:none; }
 </style>
 </head>
 <body>
@@ -465,6 +502,17 @@ PAGE = """<!doctype html>
       <h2 class="small"><span id="dStage">Working...</span><span id="dElapsed"></span></h2>
       <div class="bar"><i id="dBar"></i></div>
       <div class="log" id="dLog"></div>
+    </div>
+
+    <!-- Appears as soon as the script is final, which is before the audio is
+         rendered — no reason to wait on TTS to read what the dub will say. -->
+    <div class="panel hidden" id="dScript">
+      <h2 class="small"><span>Transcript <span id="dScriptN"></span></span>
+        <span>
+          <button class="mini" id="dScriptEn">Hide English</button>
+          <button class="mini" id="dScriptCopy">Copy</button>
+        </span></h2>
+      <div class="tsc" id="dScriptBody"></div>
     </div>
 
     <div class="panel hidden" id="dResult">
@@ -557,6 +605,8 @@ async function startDub() {
   $("dGo").disabled = true;
   setStatus($("dStatus"), "");
   $("dResult").classList.add("hidden");
+  $("dScript").classList.add("hidden");
+  scriptRows = null;                     /* a new run gets a new script */
   $("dProgress").classList.remove("hidden");
   $("dBar").style.width = "0%"; $("dLog").textContent = ""; $("dStage").textContent = "Starting...";
   try {
@@ -587,6 +637,7 @@ function watch(id) {
     const atBottom = log.scrollHeight - log.scrollTop - log.clientHeight < 30;
     log.textContent = d.log.join("\\n");
     if (atBottom) log.scrollTop = log.scrollHeight;
+    if (d.has_transcript) loadScript(id);
     if (d.status === "done") {
       clearInterval(poll); $("dGo").disabled = false;
       setStatus($("dStatus"), "Done in " + fmt(d.elapsed) + ".", "ok");
@@ -614,6 +665,73 @@ function showResult(id, name) {
   $("dPath").textContent = "Saved in the app's dubs\\\\ folder as " + name;
   $("dResult").classList.remove("hidden");
 }
+
+/* ---------- transcript ---------- */
+/* Fetched once and cached: the status poll runs every 1.2s but a 20-minute talk
+   is ~300 sentences, so the script rides its own endpoint and is asked for once. */
+let scriptRows = null;
+
+async function loadScript(id) {
+  if (scriptRows) return;
+  scriptRows = "loading";                      /* claim it before awaiting */
+  try {
+    const d = await (await fetch("/api/dub/" + id + "/transcript")).json();
+    if (!d.ok) { scriptRows = null; return; }
+    scriptRows = d.rows;
+    drawScript();
+  } catch (e) { scriptRows = null; }           /* a dropped fetch just retries */
+}
+
+function ts(s) {
+  const m = Math.floor(s / 60), x = Math.floor(s % 60);
+  return m + ":" + String(x).padStart(2, "0");
+}
+
+function esc(s) {
+  return (s || "").replace(/[&<>]/g, c => (
+    c === "&" ? "&amp;" : c === "<" ? "&lt;" : "&gt;"));
+}
+
+function drawScript() {
+  if (!Array.isArray(scriptRows)) return;
+  const idioms = scriptRows.reduce((n, r) => n + (r.idioms ? r.idioms.length : 0), 0);
+  $("dScriptN").textContent = scriptRows.length + " lines" +
+    (idioms ? " \\u00b7 " + idioms + " idiom" + (idioms > 1 ? "s" : "") : "");
+  $("dScriptBody").innerHTML = scriptRows.map(r => {
+    /* Mark the substituted spans. They are the one part of the spoken line that
+       is deliberately NOT a translation of the English above it, so someone
+       comparing the two columns should be told why they differ. */
+    const tags = (r.idioms || []).map(m =>
+      '<span class="tag">' + esc(m.en) + " \\u2192 " + esc(m.hi) + "</span>").join(" ");
+    return '<div class="t' + (tags ? " idm" : "") + '">' +
+             '<div class="ts">' + ts(r.start) + "</div>" +
+             "<div>" +
+               '<div class="en">' + esc(r.text) + "</div>" +
+               '<div class="hi">' + esc(r.tr) + "</div>" +
+               tags +
+             "</div>" +
+           "</div>";
+  }).join("");
+  $("dScript").classList.remove("hidden");
+}
+
+$("dScriptEn").addEventListener("click", () => {
+  const body = $("dScriptBody"), off = body.classList.toggle("noen");
+  $("dScriptEn").textContent = off ? "Show English" : "Hide English";
+});
+
+$("dScriptCopy").addEventListener("click", async () => {
+  if (!Array.isArray(scriptRows)) return;
+  const text = scriptRows.map(r => ts(r.start) + "\\t" + r.text + "\\n\\t" + r.tr)
+                         .join("\\n\\n");
+  try {
+    await navigator.clipboard.writeText(text);
+    $("dScriptCopy").textContent = "Copied";
+  } catch (e) {
+    $("dScriptCopy").textContent = "Copy failed";
+  }
+  setTimeout(() => { $("dScriptCopy").textContent = "Copy"; }, 1500);
+});
 
 $("dGo").addEventListener("click", startDub);
 $("dUrl").addEventListener("keydown", e => { if (e.key === "Enter") startDub(); });

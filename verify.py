@@ -69,6 +69,18 @@ def check(entry: idioms.Entry, data: idioms.IdiomData, translate) -> dict:
             f"entry does not match its own sample. Check `en` against: {sample!r}")
         return r
 
+    # A false positive is the worst outcome this file can produce: it swaps a
+    # CORRECT translation for a confidently wrong one, on a sentence nobody
+    # suspected. Checked before anything else costs a network call.
+    for neg in entry.counter_examples:
+        _, negmarks = data.mark(neg)
+        if any(m.entry_id == entry.id for m in negmarks):
+            r["status"] = "FAIL"
+            r["notes"].append(
+                f"FALSE POSITIVE — fires on a literal use: {neg!r}. "
+                f"Add the giveaway word to `not_after`/`not_before`.")
+            return r
+
     try:
         r["plain"] = translate(sample)
         frame = translate(masked)

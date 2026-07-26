@@ -698,11 +698,34 @@ def _apply_presets(args) -> None:
             args.max_video = 1.6
 
 
-def run_dub(args, progress=None) -> str:
+def transcript_of(groups: list[dict]) -> list[dict]:
+    """The dub's script as plain JSON-safe rows: what was said, when, and what got
+    spoken in its place.
+
+    Separate from the pipeline because the sentences are worth reading on their
+    own — this is what lets the GUI show a real synced transcript instead of the
+    flat unsynced block that used to live in the deleted caption tab.
+    """
+    return [{"start": round(g["start"], 2),
+             "end": round(g["end"], 2),
+             "text": g["text"],
+             "tr": g.get("tr", ""),
+             # Idioms are surfaced, not hidden: a substituted span is the one part
+             # of the output that is NOT a translation of the words above it, so a
+             # reader comparing the two columns deserves to know why they differ.
+             "idioms": [{"id": m.entry_id, "en": m.en, "hi": m.hi}
+                        for m in g.get("idioms", [])]}
+            for g in groups]
+
+
+def run_dub(args, progress=None, on_transcript=None) -> str:
     """Produce the dub described by `args` (see options()); return the output path.
 
     `progress(pct, message)` is called at each stage — `pct` is a rough 0-100 for
     a progress bar, `message` is the human line the CLI would have printed.
+    `on_transcript(rows)` is called once the script is final (translated, restyled)
+    and before the voice is generated, so a caller can show the transcript while
+    the slow audio steps are still running.
     Raises DubError for anything the person asking can act on.
     """
     def say(pct: int | None, msg: str) -> None:
@@ -821,6 +844,15 @@ def run_dub(args, progress=None) -> str:
                     reverted += 1
             if reverted:
                 say(None, f"  kept {reverted} line(s) un-restyled to protect their idioms")
+
+        # The script is final here: translated, restyled, idioms spliced. Hand it
+        # over before the voice run, which is the longest step — there's no reason
+        # to make someone wait on audio to read what the dub is going to say.
+        if on_transcript:
+            try:
+                on_transcript(transcript_of(groups))
+            except Exception:
+                pass          # a display feature must never take the dub down
 
         say(65, "Generating voice...")
         # Per-line ticks: TTS is the step where a long video sits longest, so the

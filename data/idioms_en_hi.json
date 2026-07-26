@@ -3,6 +3,12 @@
   "source_language": "en",
   "target_language": "hi",
   "about": "English idiom -> the HINDI IDIOM used in the same situation. Never the literal words, and never a plain-language paraphrase: a paraphrase is accurate but reads like a textbook, and the point of this file is that a listener should hear what a Hindi speaker would actually say.",
+  "PROVENANCE — READ THIS BEFORE TRUSTING THE HINDI": [
+    "The Hindi in this file was written from the author's own knowledge. It was NOT taken from a Hindi idiom dictionary, a parallel corpus, a HuggingFace dataset, Reddit usage, or any published collection of muhavare, and it has NOT been checked by a native speaker.",
+    "verify.py does NOT close this gap. It proves the MECHANICS — that the placeholder survives, that the splice lands, that the surrounding Hindi agrees, that the entry doesn't fire on a literal use. It cannot tell you whether the chosen Hindi is the RIGHT idiom, or a real idiom, or one anybody actually says.",
+    "Not every entry meets the brief. Some are genuine, well-attested idioms (चेहरे का रंग उड़ जाना, घिसी-पिटी बात, फिसड्डी). Others are only better plain translations — 'सर्वोच्च शिखर' for high-water mark is a plain compound, not an idiom, and it was chosen over the more idiomatic पराकाष्ठा purely because पराकाष्ठा is feminine and broke the surrounding agreement. That is a real trade of idiomaticity for mechanical safety, and it should be revisited, not hidden.",
+    "Each entry carries a `confidence` field saying which of the two it is. Treat anything not marked well-attested as a candidate for replacement once a proper source or a native speaker is consulted."
+  ],
   "how_to_add_an_entry": [
     "1. 'en' lists English surface forms that all mean the same thing. Whitespace and straight-vs-curly apostrophes are handled for you; case is ignored. Word order and tense are NOT guessed, so spell out the variants you want to catch.",
     "2. 'hi' is the replacement. It is dropped verbatim into the slot the placeholder left, so it must read correctly in that position.",
@@ -37,17 +43,6 @@
       "source": "ken-robinson-iG9CE55wbtY"
     },
     {
-      "id": "brownie-points",
-      "en": [
-        "brownie points"
-      ],
-      "hi": "नंबर",
-      "span": "phrase",
-      "sense": "informal credit earned for pleasing someone; masculine so the frame agrees",
-      "sample": "He only did it to score brownie points with the boss.",
-      "source": "ken-robinson-iG9CE55wbtY"
-    },
-    {
       "id": "high-water-mark",
       "en": [
         "the high-water mark",
@@ -56,6 +51,12 @@
       "hi": "सर्वोच्च शिखर",
       "span": "phrase",
       "sense": "the peak, the highest point ever reached. Deliberately masculine: the feminine पराकाष्ठा makes the translator emit 'के पराकाष्ठा' instead of 'की'.",
+      "confidence": "plain-translation, not a Hindi idiom — see the provenance note at the top of this file",
+      "not_after": ["on", "left", "of the river", "of the tide", "of the flood", "from the flood"],
+      "counter_examples": [
+        "You can see the high-water mark on the wall from the flood.",
+        "The high-water mark of the river was three metres up the bank."
+      ],
       "sample": "We shouldn't hold them up as the high-water mark of all human achievement.",
       "source": "ken-robinson-iG9CE55wbtY"
     },
@@ -68,6 +69,12 @@
       "hi": "वो घिसी-पिटी बात",
       "span": "phrase",
       "sense": "a joke or story told so often it has gone stale",
+      "confidence": "well-attested Hindi idiom",
+      "not_after": ["tree", "trees", "roasting", "roasted", "stall", "seller"],
+      "counter_examples": [
+        "We sat under the old chestnut tree in the garden.",
+        "The old chestnut roasting on the fire smelled wonderful."
+      ],
       "sample": "Remember that old chestnut?",
       "source": "ken-robinson-iG9CE55wbtY"
     },
@@ -79,6 +86,11 @@
       "hi": "थोड़ा चैन से रहने दो",
       "span": "clause",
       "sense": "stop bothering me, let me be",
+      "confidence": "natural spoken Hindi",
+      "not_after": ["of", "from", "between", "after", "before"],
+      "counter_examples": [
+        "Give me a break of ten minutes between the sessions."
+      ],
       "sample": "Terry, please, I'm trying to fry an egg in here. Give me a break.",
       "source": "ken-robinson-iG9CE55wbtY"
     },
@@ -90,6 +102,12 @@
       "hi": "ताल से बाहर",
       "span": "phrase",
       "sense": "out of time with the music. The literal reading turns 'beat' into a heartbeat.",
+      "confidence": "correct and natural, though a plain phrase rather than a fixed idiom",
+      "not_before": ["walked", "walk", "stepped", "step", "went", "come", "came", "getting", "got"],
+      "counter_examples": [
+        "The constable walked off the beat and went home.",
+        "She stepped off the beat and onto the pavement."
+      ],
       "sample": "Grown men and women writhing uncontrollably, off the beat.",
       "source": "ken-robinson-iG9CE55wbtY"
     },
@@ -113,6 +131,11 @@
       "hi": "वो पढ़ाई में बिल्कुल फिसड्डी थी",
       "span": "clause",
       "sense": "she was very bad at schoolwork. The literal Hindi says she FELT hopeless, which is the wrong sense entirely.",
+      "confidence": "फिसड्डी is well-attested for exactly this (bad at studies). NOTE the Hindi hard-codes 'पढ़ाई' (schoolwork), so the guards below keep it to school contexts.",
+      "not_after": ["about", "at the", "in the face", "of ever"],
+      "counter_examples": [
+        "The nurse said she was really hopeless about her recovery chances."
+      ],
       "sample": "When she was at school, she was really hopeless.",
       "source": "ken-robinson-iG9CE55wbtY"
     },
@@ -170,6 +193,11 @@
       "hi": "वो आपको सवालों से घेर लेते हैं",
       "span": "clause",
       "sense": "they corner you and press you hard about it",
+      "confidence": "natural Hindi; सवालों से घेरना is idiomatic for being pressed with questions",
+      "not_after": ["with", "using", "by the"],
+      "counter_examples": [
+        "They pin you to the wall with those clips when they measure your height."
+      ],
       "sample": "But if you ask about their education, they pin you to the wall.",
       "source": "ken-robinson-iG9CE55wbtY"
     }

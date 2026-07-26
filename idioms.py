@@ -85,6 +85,19 @@ class Entry:
     sense: str = ""               # plain-English meaning, for whoever edits this
     sample: str = ""              # a real sentence, used by verify.py
     source: str = ""              # where the example came from
+    # --- literal-sense guards, the defence against a false positive ----------
+    # Almost every idiom's words also have a literal reading: "the old chestnut
+    # TREE", "the high-water mark ON the wall", "walked OFF THE BEAT". Firing
+    # there is worse than having no entry at all, because it swaps a correct
+    # translation for a confidently wrong one and nothing says so. These block the
+    # match when the neighbouring word gives the literal sense away.
+    not_after: list[str] = field(default_factory=list)   # word(s) right AFTER
+    not_before: list[str] = field(default_factory=list)  # word(s) right BEFORE
+    # Sentences that use the words literally. verify.py FAILS if any of them fire,
+    # so a guard can never be quietly weakened by a later edit.
+    counter_examples: list[str] = field(default_factory=list)
+    confidence: str = ""          # how well-attested the Hindi side is
+    note: str = ""
 
 
 @dataclass
@@ -147,6 +160,8 @@ class IdiomData:
                 s, e = m.start(), m.end()
                 if any(s < ce and e > cs for cs, ce in claimed):
                     continue          # overlaps something already taken
+                if _literal_here(text, s, e, entry):
+                    continue          # the words are being used literally
                 claimed.append((s, e))
                 hits.append((s, e, entry, m.group(0)))
 
@@ -169,6 +184,36 @@ class IdiomData:
         return "".join(out), marks
 
 
+def _literal_here(text: str, start: int, end: int, entry: Entry) -> bool:
+    """Is this occurrence the LITERAL sense rather than the idiom?
+
+    Judged only from the immediate neighbours, which is all a deterministic
+    matcher can honestly claim to know. "the old chestnut" is the idiom; "the old
+    chestnut TREE" is a tree. "give me a break" is the idiom; "give me a break OF
+    ten minutes" is a pause.
+
+    This narrows the risk, it does not remove it — nothing without word-sense
+    disambiguation can. That is the argument for keeping entries long and
+    specific: a whole clause is far less likely to occur literally than two words.
+    """
+    if entry.not_after:
+        after = text[end:].lstrip(" ,.;:!?'\"")
+        low = after.lower()
+        for w in entry.not_after:
+            w = w.lower()
+            if low.startswith(w) and (len(low) == len(w)
+                                      or not low[len(w)].isalnum()):
+                return True
+    if entry.not_before:
+        before = text[:start].rstrip(" ,.;:!?'\"").lower()
+        for w in entry.not_before:
+            w = w.lower()
+            if before.endswith(w) and (len(before) == len(w)
+                                       or not before[-len(w) - 1].isalnum()):
+                return True
+    return False
+
+
 def _compile_surface(surface: str) -> re.Pattern:
     """Build a tolerant matcher for one English surface form.
 
@@ -181,9 +226,13 @@ def _compile_surface(surface: str) -> re.Pattern:
     exact phrase it spells. List the variants explicitly instead of guessing, so
     that what matches stays inspectable.
     """
-    parts = [re.escape(w) for w in surface.split()]
-    body = r"\s+".join(parts)
-    body = body.replace(r"\'", "['’]").replace("'", "['’]")
+    # Built character by character rather than by escaping the whole string and
+    # patching it afterwards: a replace() pass over an escaped pattern can chew
+    # its own output (the apostrophe class contains an apostrophe), and whether it
+    # does depends on which characters the Python version happens to escape.
+    words = [("".join("['’]" if c in "'’" else re.escape(c) for c in w))
+             for w in surface.split()]
+    body = r"\s+".join(words)
     # \b only where the edge is actually a word character; an entry may start or
     # end on punctuation, and \b next to punctuation would never match.
     left = r"\b" if surface[:1].isalnum() else ""

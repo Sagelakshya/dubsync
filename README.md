@@ -44,6 +44,12 @@ Two tabs:
    no faces / audio only). A dub takes minutes, so it runs in the background and
    the page shows the stage it's on, the log, and elapsed time. Finished files
    also land in the app's `dubs\` folder.
+   A **transcript panel** appears as soon as the script is final, which is before
+   the audio finishes rendering: every sentence with its timestamp, the original
+   English, and what actually gets spoken. Any line where an idiom was swapped is
+   marked with the substitution, since that is the one part of the output which is
+   deliberately not a translation of the words above it. English can be hidden to
+   read the target language alone, and the whole thing copies to the clipboard.
 2. **Text → speech** — paste any script, optionally translate it first, pick a
    voice (male/female per language) and a speed, get an `.mp3`. No video needed.
 
