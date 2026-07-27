@@ -845,7 +845,9 @@ def run_dub(args, progress=None, on_transcript=None) -> str:
             raise DubError(
                 f"Hinglish is on, but the local model isn't available.\n{e}\n"
                 "Fix it (start Ollama, run 'ollama pull gemma3:4b', or close some "
-                "apps if it's out of memory) — or turn Hinglish off to dub in "
+                # ASCII only: this prints to a console, and cp1252 turns an
+                # em-dash into mojibake. It is the first error a new user hits.
+                "apps if it's out of memory), or turn Hinglish off to dub in "
                 "regular Hindi.") from e
 
     with tempfile.TemporaryDirectory(prefix="dub_") as workdir:

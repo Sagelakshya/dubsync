@@ -141,7 +141,8 @@ def _transcribe_piece(model, audio, lang: str | None) -> list[dict]:
                 "(--whisper-model tiny or base)."
             ) from e
         mid = _quiet_cut(audio, len(audio) // 2, int(SNAP_SECONDS * SR))
-        print("  [whisper] low memory — splitting this piece and retrying.")
+        # ASCII only - cp1252 consoles mangle an em-dash into mojibake.
+        print("  [whisper] low memory - splitting this piece and retrying.")
         first = _transcribe_piece(model, audio[:mid], lang)
         second = _transcribe_piece(model, audio[mid:], lang)
         shift = mid / SR
