@@ -81,7 +81,7 @@ Full license texts for every entry below are in `licenses/<name>/`.
 | hf-xet | 1.5.2 | Apache-2.0 | <https://github.com/huggingface/xet-core> |
 | httpcore | 1.0.9 | BSD-3-Clause | <https://www.encode.io/httpcore/> |
 | httpx | 0.28.1 | BSD-3-Clause | <https://github.com/encode/httpx> |
-| huggingface_hub | 1.24.0 | Apache-2.0 | <https://github.com/huggingface/huggingface_hub> |
+| huggingface_hub | 1.25.1 | Apache-2.0 | <https://github.com/huggingface/huggingface_hub> |
 | idna | 3.18 | BSD-3-Clause | <https://github.com/kjd/idna> |
 | itsdangerous | 2.2.0 | BSD License | <https://github.com/pallets/itsdangerous/> |
 | Jinja2 | 3.1.6 | BSD License | <https://github.com/pallets/jinja/> |
