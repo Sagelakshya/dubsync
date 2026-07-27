@@ -252,6 +252,7 @@ def api_dub_start():
     footage = body.get("footage", "faceless")
     source = body.get("source", "whisper")
     hing = bool(body.get("hinglish"))
+    voice = (body.get("voice") or "").strip() or None
 
     if not yt_id(url):
         return jsonify(ok=False, error="That doesn't look like a YouTube link."), 400
@@ -263,6 +264,10 @@ def api_dub_start():
         return jsonify(ok=False, error=f"Unknown transcript source '{source}'."), 400
     if hing and lang != "hi":
         return jsonify(ok=False, error="Hinglish only applies to Hindi."), 400
+    # Reject an unknown voice here rather than letting edge-tts fail minutes into
+    # the run, once transcription and translation have already been paid for.
+    if voice and voice not in [v for _, v in VOICE_CHOICES.get(lang, [])]:
+        return jsonify(ok=False, error=f"Unknown voice '{voice}' for this language."), 400
     with LOCK:
         if _running_count() >= MAX_RUNNING:
             return jsonify(ok=False, error="A dub is already running. They're too "
@@ -273,7 +278,7 @@ def api_dub_start():
     ext = preset.pop("ext")
     os.makedirs(OUT_DIR, exist_ok=True)
     name = f"dub_{yt_id(url)}_{lang}_{time.strftime('%H%M%S')}.{ext}"
-    opts = dict(url=url, lang=lang, source=source, hinglish=hing,
+    opts = dict(url=url, lang=lang, source=source, hinglish=hing, voice=voice,
                 out=os.path.join(OUT_DIR, name), **preset)
 
     job_id = uuid.uuid4().hex[:12]
@@ -472,6 +477,10 @@ PAGE = """<!doctype html>
             {% for label, code in languages %}<option value="{{ code }}"{% if code == 'hi' %} selected{% endif %}>{{ label }}</option>{% endfor %}
           </select>
         </div>
+        <div>
+          <label class="field" for="dVoice">Voice</label>
+          <select id="dVoice" style="width:100%;"></select>
+        </div>
         <div id="hingWrap">
           <label class="field">Style</label>
           <label class="choice on" id="hingBox" style="display:block;">
@@ -601,6 +610,16 @@ function syncHinglish() {
   const hi = $("dLang").value === "hi";
   $("hingWrap").classList.toggle("hidden", !hi);
 }
+/* The dub's voice list is per language, so it is rebuilt whenever the language
+   changes. Same VOICES catalogue the read-aloud panel uses — it was always there,
+   the dub just had no way to reach it and every default is female. */
+function fillDubVoices() {
+  const list = VOICES[$("dLang").value] || [];
+  $("dVoice").innerHTML = list.map(([l, v]) =>
+    '<option value="' + v + '">' + l + '</option>').join("");
+  $("dVoice").parentElement.style.display = list.length ? "" : "none";
+}
+$("dLang").addEventListener("change", fillDubVoices); fillDubVoices();
 $("dLang").addEventListener("change", syncHinglish); syncHinglish();
 $("dHing").addEventListener("change", () => $("hingBox").classList.toggle("on", $("dHing").checked));
 
@@ -612,6 +631,7 @@ async function startDub() {
   if (!url) { setStatus($("dStatus"), "Paste a YouTube link first.", "err"); return; }
   const body = {
     url, lang: $("dLang").value, source: picked("src"), footage: picked("foot"),
+    voice: $("dVoice").value,
     hinglish: $("dLang").value === "hi" && $("dHing").checked
   };
   $("dGo").disabled = true;

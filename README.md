@@ -204,6 +204,10 @@ from dubsync, so it is reusable for subtitles, copy, or any other English→Hind
 - **The trade you control:** to *guarantee* fit, expansion-heavy lines get sped
   up. A very slow, pause-heavy speaker can need 2–3× on a stretch (the run prints
   which lines and how fast). Dials:
+  - `--voice NAME` — which voice speaks the dub, e.g. `--voice hi-IN-MadhurNeural`
+    for a male Hindi voice. Defaults to the language's standard voice. Run
+    `dub.py --list-voices` for the full list, or use the **Voice** picker in the
+    web app. An unknown name is rejected before any work starts.
   - `--max-speed 1.5` — the "natural" threshold; lines faster than this are flagged.
   - `--hard-max 3.0` — absolute ceiling used to force the fit.
   - `--tts-rate-max 40` — how much of an overrun the **voice** absorbs by speaking

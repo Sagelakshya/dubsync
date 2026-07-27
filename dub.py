@@ -42,7 +42,7 @@ import tempfile
 from concurrent.futures import ThreadPoolExecutor
 
 # Reuse the language/voice tables app.py already curates so the two stay in sync.
-from app import LANGUAGES, VOICES, yt_id
+from app import LANGUAGES, VOICES, VOICE_CHOICES, yt_id
 import hinglish     # optional Hinglish restyle (local Gemma via Ollama)
 import idioms       # English idiom -> Hindi idiom, deterministic (EN->HI only)
 import transcribe   # Whisper transcription (the trustworthy transcript source)
@@ -728,6 +728,9 @@ DEFAULTS = dict(
     max_speed=1.5, hard_max=3.0, allow_drift=False, keep_original=0.0,
     retime=False, max_video=1.25, smooth=False, faces=False, broll=False,
     hinglish=False, hinglish_model=None, source="whisper", whisper_model="small",
+    # None = the language's standard voice from VOICES. Any other value must be a
+    # voice name from VOICE_CHOICES for that language; see run_dub.
+    voice=None,
     # How much of an overrun edge-tts is asked to absorb by speaking faster, before
     # ffmpeg atempo takes the rest. 0 disables it and restores the old behaviour.
     tts_rate_max=40,
@@ -801,7 +804,26 @@ def run_dub(args, progress=None, on_transcript=None) -> str:
         raise DubError(f"Unknown lang '{args.lang}'. Known: {', '.join(c for _, c in LANGUAGES)}")
     if args.hinglish and args.lang != "hi":
         raise DubError("Hinglish is Hindi-only; choose Hindi (or turn Hinglish off).")
+    # The dub voice. `VOICES` is one default per language and every one of them is
+    # female — that was never a decision, just a default nobody revisited, and until
+    # --voice existed there was no supported way to dub in a man's voice at all.
+    # `VOICE_CHOICES` is the curated male/female catalogue the read-aloud panel has
+    # always used; the dub simply could not reach it.
+    #
+    # An explicit voice is validated against that catalogue rather than passed
+    # straight through: edge-tts rejects an unknown name at synthesis time, which is
+    # minutes into a run, after transcription and translation have already been paid
+    # for. Falling back to the default instead would be worse still — it would hand
+    # back a whole dub in the wrong voice under a green "Done".
     voice = VOICES.get(args.lang, VOICES["en"])
+    if args.voice:
+        choices = VOICE_CHOICES.get(args.lang, [])
+        if args.voice not in [v for _, v in choices]:
+            raise DubError(
+                f"Unknown voice '{args.voice}' for '{args.lang}'.\nAvailable: "
+                + ", ".join(f"{lbl} = {v}" for lbl, v in choices)
+                + "\n(Run: dub.py --list-voices)")
+        voice = args.voice
 
     # Decide up front whether we're producing a video (mux) or just audio.
     out = args.out
@@ -983,6 +1005,27 @@ def run_dub(args, progress=None, on_transcript=None) -> str:
     return out
 
 
+class _ListVoices(argparse.Action):
+    """Print the voice catalogue and exit.
+
+    An argparse Action rather than a normal flag because `url` is positional and
+    required: `dub.py --list-voices` would otherwise fail for a missing URL before
+    it could answer the question. Actions fire during parsing, so this answers and
+    exits first.
+    """
+    def __call__(self, parser, namespace, values, option_string=None):
+        for label, code in LANGUAGES:
+            choices = VOICE_CHOICES.get(code)
+            if not choices:
+                continue
+            default = VOICES.get(code)
+            print(f"\n{label} ({code})")
+            for name, v in choices:
+                print(f"   {v:<28} {name}{'   [default]' if v == default else ''}")
+        print("\nUse: dub.py <url> --lang hi --voice hi-IN-MadhurNeural")
+        parser.exit()
+
+
 def main() -> None:
     interactive = len(sys.argv) == 1        # double-clicked, not run from a shell
     ap = argparse.ArgumentParser(description="Timestamp-synced translated dub of a YouTube video.")
@@ -1016,6 +1059,12 @@ def main() -> None:
                     help="preset for talking-head footage: --retime with a tight video bound (--max-video 1.1)")
     ap.add_argument("--broll", action="store_true",
                     help="preset for faceless footage (POV/gameplay/screencast): --retime --max-video 1.6 --smooth")
+    ap.add_argument("--voice", default=None, metavar="NAME",
+                    help="voice for the dub, e.g. hi-IN-MadhurNeural for a male Hindi "
+                         "voice (default: the language's standard voice). "
+                         "See --list-voices")
+    ap.add_argument("--list-voices", action=_ListVoices, nargs=0,
+                    help="print the available voices for every language and exit")
     ap.add_argument("--hinglish", action="store_true",
                     help="speak natural Hinglish (Hindi-English mix) instead of formal Hindi (--lang hi only)")
     ap.add_argument("--hinglish-model", default=None,
@@ -1043,7 +1092,15 @@ if __name__ == "__main__":
     try:
         main()
     except SystemExit as e:
-        if _interactive and e.code not in (0, None):
+        # `main()` reports a DubError as sys.exit(str(e)), which normally prints the
+        # message to stderr and exits 1. Catching it here and doing nothing when the
+        # console wasn't interactive meant EVERY CLI error — bad URL, unknown
+        # language, unavailable Hinglish model — printed nothing and exited 0, so a
+        # script calling dub.py read failure as success. Only the double-clicked
+        # case needs to be intercepted, and only so the window can be held open.
+        if not _interactive:
+            raise
+        if e.code not in (0, None):
             print(f"\nStopped: {e.code}")
     except Exception:
         if not _interactive:
