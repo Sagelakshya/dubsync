@@ -17,7 +17,7 @@
     "4. 'sample' MUST be the real full sentence the idiom appeared in, never a trimmed version of it. The translator builds a different frame around the placeholder depending on the rest of the sentence, so a short sample can pass while the real line breaks. This is not hypothetical: a bare 'on parade' entry verified clean against a trimmed sample and then produced 'नुमाइश पर की' in the actual talk.",
     "5. BEFORE ANY OF THE ABOVE, two checks that killed an entry on 2026-07-27. (a) Is the ENGLISH actually an idiom? A dictionary must carry it — a learner forum is not attestation. 'nail someone to the wall' is a dictionary idiom; 'pin someone to the wall' is not, and that entry is now in the REMOVED block at the bottom of this file. Sourcing only the Hindi side and calling the pair sourced is the same mistake in a new place. (b) What does the PLAIN translation actually do? Run it. Every entry that belongs here exists because the plain output was actively broken — bleeding faces, ब्राउनी पॉइंट, a document वॉटरमार्क. If the plain output is merely flat rather than wrong, there is NO entry to add: replacing an acceptable answer is worse than having no rule.",
     "6. 'note' MUST carry the citation URL for the Hindi, and 'confidence' MUST use the vocabulary in the provenance block above. An entry whose Hindi you cannot cite does not go in.",
-    "7. Any entry whose longest 'en' form is under ~4 words needs 'counter_examples', and Sage05 is asked before it is added — short entries are where false positives live.",
+    "7. Any entry whose longest 'en' form is under ~4 words needs 'counter_examples', and the maintainer is asked before it is added — short entries are where false positives live.",
     "8. Run `python verify.py` after adding anything. It puts every entry through the real translator and flags a splice that came out wrong. Do not trust an entry you have not verified. NOTE what verify.py cannot do: it proves the mechanism, not that the entry should exist. Step 5 is the check it will never make for you.",
     "9. Adding an entry needs no code change. This file is data."
   ],
@@ -101,7 +101,7 @@
       "span": "clause",
       "sense": "stop bothering me, let me be",
       "confidence": "attested-idiom",
-      "note": "CHANGED in v2 from 'थोड़ा चैन से रहने दो', which was a serviceable paraphrase rather than an idiom. पीछा छोड़ना / पीछा छुड़ाना (and its stronger cousin पिंड छुड़ाना) is the attested muhavara for getting someone off your back: https://hindivarta.com/pind-chhudana-pichha-chhudana-muhavara-arth-vakya-prayog/, which carries the usage 'वह तो मेरा पिंड ही नहीं छोड़ता'. FOR SAGE05: 'मेरा पिंड छोड़ो' is the more colourful option and equally attested; I picked पीछा as the more neutral of the two for a TED-talk register. Say if you want पिंड.",
+      "note": "CHANGED in v2 from 'थोड़ा चैन से रहने दो', which was a serviceable paraphrase rather than an idiom. पीछा छोड़ना / पीछा छुड़ाना (and its stronger cousin पिंड छुड़ाना) is the attested muhavara for getting someone off your back: https://hindivarta.com/pind-chhudana-pichha-chhudana-muhavara-arth-vakya-prayog/, which carries the usage 'वह तो मेरा पिंड ही नहीं छोड़ता'. REVIEWER NOTE: 'मेरा पिंड छोड़ो' is the more colourful option and equally attested; पीछा was chosen as the more neutral of the two for a talk register.",
       "not_after": ["of", "from", "between", "after", "before"],
       "counter_examples": [
         "Give me a break of ten minutes between the sessions."
@@ -218,11 +218,11 @@
     {
       "id": "pin-you-to-the-wall",
       "was": "they pin you to the wall -> वो आपको सवालों से घेर लेते हैं (v1) / वो आपको आड़े हाथों लेते हैं (v2 draft)",
-      "removed": "2026-07-27, by Sage05, and he was right to kill it",
+      "removed": "2026-07-27, by Sage05 - correctly",
       "why": [
         "THE ENGLISH SIDE IS NOT AN IDIOM. This is the failure the entry teaches. Both v1 and v2 asked whether the HINDI was attested and never asked whether the ENGLISH was an idiom at all. 'NAIL someone to the wall' is a dictionary idiom (Longman, Collins, Wiktionary, TheFreeDictionary). 'PIN someone to the wall' is in none of them — TheFreeDictionary carries only the literal 'pin someone to' (shove and hold in place). Its figurative sense appears only in learner forums and content farms, including two WordReference threads, one titled exactly 'They pin you to the wall'. Learners having to ask is the evidence: it is not a set phrase. Robinson said it loosely, blending 'pin down' with 'nail to the wall'.",
         "THE PLAIN TRANSLATION WAS NEVER BROKEN. Google gave 'वे आपको परेशान कर देते हैं' (they trouble you) — flat, but not wrong. Every other entry in this file exists because the plain output was actively broken (bleeding faces, ब्राउनी पॉइंट, a document वॉटरमार्क, a school that retires). This one replaced an acceptable answer, which is precisely what this project already learned is worse than having no rule: see the false-positive lesson in AGENTS.md.",
-        "AND THE HINDI WAS WRONG ANYWAY. आड़े हाथों लेना is well attested but means to rebuke — Sage05's own glosses for it are 'take to task', 'haul over the coals', 'give someone a piece of one's mind', 'call someone on the carpet'. All four are telling someone off. The English means cornered and pressed. Wrong sense."
+        "AND THE HINDI WAS WRONG ANYWAY. आड़े हाथों लेना is well attested but means to rebuke — the standard glosses for it are 'take to task', 'haul over the coals', 'give someone a piece of one's mind', 'call someone on the carpet'. All four are telling someone off. The English means cornered and pressed. Wrong sense."
       ],
       "rule_this_produced": "Before adding an entry, check the ENGLISH is a real idiom (a dictionary must carry it, not a forum), AND check what the plain translation actually does. If the plain output is acceptable, there is no entry to add. An idiom dictionary earns its keep only where literal translation breaks."
     }

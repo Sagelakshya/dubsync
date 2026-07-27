@@ -260,3 +260,15 @@ An explicit `--max-video` still overrides the preset.
   net expansion — expected, since you're making room for the longer speech.
 - **Best for faceless footage;** on talking heads the stretched motion is visible,
   so keep `--max-video` tight or use the default audio-fit mode there.
+
+## Third-party components
+
+Bundled runtime dependencies and their licences are listed in
+[`THIRD-PARTY-LICENSES.md`](THIRD-PARTY-LICENSES.md), regenerated from the built
+runtime's own package metadata. The Windows download also bundles a static
+**ffmpeg** build; its licence and source notice ship inside the zip under
+`licenses/ffmpeg/`.
+
+## License
+
+MIT — see [`LICENSE`](LICENSE).

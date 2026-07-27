@@ -56,7 +56,10 @@ def _ff_dirs() -> list[str]:
     if env:
         dirs.append(env)
     dirs.append(os.path.join(_HERE, "ffmpeg", "bin"))   # drop ffmpeg here to ship it
-    dirs.append(r"D:\Toolkit\ffmpeg\bin")               # Sage05's bundled copy
+    # Last resort: a fixed local install used on the maintainer's machine. Harmless
+    # elsewhere (the path simply won't exist) and it keeps a dev checkout working
+    # without FFMPEG_DIR set. Prefer FFMPEG_DIR or the bundled copy above.
+    dirs.append(r"D:\Toolkit\ffmpeg\bin")
     return dirs
 
 def _tool(name: str) -> str:
