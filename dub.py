@@ -309,27 +309,84 @@ def translate_groups(groups: list[dict], target: str) -> int:
 
 # --- 4. TTS each translated group into an mp3 (edge-tts, concurrent) ---------
 async def _synth_all(groups: list[dict], voice: str, workdir: str,
-                     on_one=None) -> None:
-    """TTS every group. `on_one(done, total)` fires as each line lands, so a caller
-    with a progress bar (the web GUI) can show movement during the slowest step."""
+                     on_one=None, only: list[int] | None = None,
+                     rates: dict[int, str] | None = None) -> None:
+    """TTS every group (or just the indices in `only`).
+
+    `on_one(done, total)` fires as each line lands, so a caller with a progress bar
+    (the web GUI) can show movement during the slowest step.
+
+    `rates` maps a group index to an edge-tts rate string like "+25%". That asks the
+    ENGINE to speak faster, which is a different thing from speeding the finished
+    audio up afterwards — see `plan_native_rates`.
+    """
     import edge_tts
     sem = asyncio.Semaphore(6)   # don't hammer Microsoft on long videos
+    idxs = list(range(len(groups))) if only is None else list(only)
     done = 0
 
     async def one(i: int, text: str) -> None:
         nonlocal done
+        rate = (rates or {}).get(i, "+0%")
         async with sem:
             buf = bytearray()
-            async for part in edge_tts.Communicate(text, voice).stream():
+            async for part in edge_tts.Communicate(text, voice, rate=rate).stream():
                 if part["type"] == "audio":
                     buf.extend(part["data"])
         with open(os.path.join(workdir, f"raw{i}.mp3"), "wb") as f:
             f.write(bytes(buf))
         done += 1
         if on_one:
-            on_one(done, len(groups))
+            on_one(done, len(idxs))
 
-    await asyncio.gather(*(one(i, g["tr"]) for i, g in enumerate(groups)))
+    await asyncio.gather(*(one(i, groups[i]["tr"]) for i in idxs))
+
+
+def plan_native_rates(groups: list[dict], workdir: str, cap_pct: int
+                      ) -> dict[int, str]:
+    """Which lines should be RE-SPOKEN faster, and how much faster.
+
+    Why this exists. A translated line is usually longer than the slot it has to
+    fit — measured on a 19-minute talk, 196 of 311 Hindi lines overran, because
+    Google renders formal written Hindi and formal Hindi is wordier than speech.
+    `build_timeline` fixes that with ffmpeg `atempo`, which time-compresses audio
+    that has already been spoken. It preserves pitch, but the pauses, stresses and
+    breaths were all placed for the slower reading, so it sounds like a recording
+    played fast.
+
+    edge-tts can instead be asked to speak the line faster in the first place, and
+    it re-synthesises with prosody appropriate to that speed: brisk speech rather
+    than a sped-up tape. So do as much of the compression as possible in the engine
+    and leave only the remainder to `atempo`.
+
+    Measured on that same talk: 71 of the overrunning lines needed less than 1.25x,
+    i.e. 40% of the problem is inside a range the engine can simply speak.
+
+    The budget here is the IDEAL slot (this line's start to the next line's start).
+    `build_timeline` uses a cursor-adjusted start, so the two agree whenever lines
+    fit, which is the case this is trying to bring about. Over-shooting is safe:
+    a clip shorter than its window is not slowed down, the trailing pause absorbs
+    it, and sync is unaffected — `build_timeline` remains the thing that guarantees
+    the fit. This only changes HOW the line got short.
+    """
+    rates: dict[int, str] = {}
+    n = len(groups)
+    for i, g in enumerate(groups):
+        raw = os.path.join(workdir, f"raw{i}.mp3")
+        if not os.path.exists(raw):
+            continue
+        clip_len = _dur(raw)
+        nxt = groups[i + 1]["start"] if i + 1 < n else g["start"] + clip_len
+        budget = max(nxt - g["start"], 0.01)
+        if clip_len <= budget * 1.02:        # already fits; leave it alone
+            continue
+        # Speak it fast enough to fit, but never past the cap — past roughly +40%
+        # the voice stops sounding like a person and atempo is no worse.
+        needed_pct = (clip_len / budget - 1.0) * 100.0
+        pct = int(min(needed_pct, cap_pct))
+        if pct >= 5:                         # under 5% is not worth a second call
+            rates[i] = f"+{pct}%"
+    return rates
 
 
 # --- ffmpeg helpers ----------------------------------------------------------
@@ -671,6 +728,9 @@ DEFAULTS = dict(
     max_speed=1.5, hard_max=3.0, allow_drift=False, keep_original=0.0,
     retime=False, max_video=1.25, smooth=False, faces=False, broll=False,
     hinglish=False, hinglish_model=None, source="whisper", whisper_model="small",
+    # How much of an overrun edge-tts is asked to absorb by speaking faster, before
+    # ffmpeg atempo takes the rest. 0 disables it and restores the old behaviour.
+    tts_rate_max=40,
 )
 
 
@@ -858,8 +918,27 @@ def run_dub(args, progress=None, on_transcript=None) -> str:
         # Per-line ticks: TTS is the step where a long video sits longest, so the
         # bar has to keep moving there or the page looks stuck.
         asyncio.run(_synth_all(groups, voice, workdir,
-                               on_one=lambda d, t: say(65 + int(15 * d / t),
+                               on_one=lambda d, t: say(65 + int(13 * d / t),
                                                        f"  voice {d}/{t} lines")))
+
+        # Second pass: re-speak the lines that overran, asking the ENGINE to talk
+        # faster rather than compressing finished audio with ffmpeg. Costs one extra
+        # TTS call per overrunning line and buys a voice that sounds hurried instead
+        # of sped-up. build_timeline still guarantees the fit either way, so if this
+        # step is skipped or fails the dub is exactly what it used to be.
+        if args.tts_rate_max > 0:
+            try:
+                rates = plan_native_rates(groups, workdir, args.tts_rate_max)
+                if rates:
+                    say(78, f"  re-speaking {len(rates)} long line(s) faster "
+                            f"(up to +{args.tts_rate_max}%) so ffmpeg has less to squeeze")
+                    asyncio.run(_synth_all(groups, voice, workdir,
+                                           only=sorted(rates), rates=rates))
+            except Exception as e:
+                # A quality improvement must never cost the dub. Fall through to the
+                # atempo-only path, which is what shipped before this existed.
+                say(None, f"  ! couldn't re-speak long lines ({type(e).__name__}); "
+                          f"using ffmpeg speed-up only.")
 
         total = _dur(video_path) if video_path else None
 
@@ -894,8 +973,11 @@ def run_dub(args, progress=None, on_transcript=None) -> str:
     elif warns:
         fastest = max(w["needed"] for w in warns)
         mode = "let it drift" if args.allow_drift else f"sped up (capped at {args.hard_max:g}x)"
+        extra = (f" The voice already absorbed up to +{args.tts_rate_max}% of this by speaking "
+                 f"faster, so these figures are what was left after that."
+                 if args.tts_rate_max > 0 else "")
         say(None, f"Note: {len(warns)} line(s) ran longer than their slot at a natural pace; "
-                  f"{mode} to keep sync (fastest needed {fastest:.2f}x). "
+                  f"{mode} to keep sync (fastest needed {fastest:.2f}x).{extra} "
                   f"Tighter sync vs. calmer voice is the --max-speed / --hard-max / --allow-drift trade.")
     say(100, f"Done -> {out}")
     return out
@@ -916,6 +998,10 @@ def main() -> None:
                     help="absolute speed ceiling used to guarantee fit (default 3.0)")
     ap.add_argument("--allow-drift", action="store_true",
                     help="don't force the fit: cap at --max-speed for a natural voice and let long lines drift")
+    ap.add_argument("--tts-rate-max", type=int, default=40, metavar="PCT",
+                    help="how much of an overrun the VOICE absorbs by speaking faster "
+                         "before ffmpeg squeezes the rest; sounds better than atempo "
+                         "alone. 0 = off, old behaviour (default 40)")
     ap.add_argument("--keep-original", type=float, default=0.0,
                     help="0-1 volume of the original audio kept under the dub (video output only)")
     ap.add_argument("--retime", action="store_true",

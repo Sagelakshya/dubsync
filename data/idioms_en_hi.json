@@ -1,21 +1,25 @@
 {
-  "version": 1,
+  "version": 2,
   "source_language": "en",
   "target_language": "hi",
   "about": "English idiom -> the HINDI IDIOM used in the same situation. Never the literal words, and never a plain-language paraphrase: a paraphrase is accurate but reads like a textbook, and the point of this file is that a listener should hear what a Hindi speaker would actually say.",
-  "PROVENANCE — READ THIS BEFORE TRUSTING THE HINDI": [
-    "The Hindi in this file was written from the author's own knowledge. It was NOT taken from a Hindi idiom dictionary, a parallel corpus, a HuggingFace dataset, Reddit usage, or any published collection of muhavare, and it has NOT been checked by a native speaker.",
-    "verify.py does NOT close this gap. It proves the MECHANICS — that the placeholder survives, that the splice lands, that the surrounding Hindi agrees, that the entry doesn't fire on a literal use. It cannot tell you whether the chosen Hindi is the RIGHT idiom, or a real idiom, or one anybody actually says.",
-    "Not every entry meets the brief. Some are genuine, well-attested idioms (चेहरे का रंग उड़ जाना, घिसी-पिटी बात, फिसड्डी). Others are only better plain translations — 'सर्वोच्च शिखर' for high-water mark is a plain compound, not an idiom, and it was chosen over the more idiomatic पराकाष्ठा purely because पराकाष्ठा is feminine and broke the surrounding agreement. That is a real trade of idiomaticity for mechanical safety, and it should be revisited, not hidden.",
-    "Each entry carries a `confidence` field saying which of the two it is. Treat anything not marked well-attested as a candidate for replacement once a proper source or a native speaker is consulted."
+  "PROVENANCE — HOW THE HINDI IN THIS FILE IS SOURCED": [
+    "v2 (2026-07-27) replaced v1's provenance. In v1 the Hindi was written from the author's own knowledge — no dictionary, no corpus, no native speaker. About five of thirteen entries were genuine idioms and the rest were better plain translations, which was below the brief.",
+    "In v2 EVERY entry carries a citation URL in its `note` field pointing at the reference the Hindi was taken from. The references used are Hindwi Dictionary and Rekhta Dictionary (both Rekhta Foundation, which label muhavare as such), Hindi Wiktionary, Collins Hindi-English, Amarkosh, and — only where a dictionary had no headword — established muhavare reference sites, named individually.",
+    "`confidence` now says exactly what kind of source backs the entry, using a fixed vocabulary: `attested-idiom` = a dictionary or muhavara reference lists it AS an idiom; `attested-word` = a dictionary headword carrying precisely the needed sense, but a word rather than a fixed idiom; `attested-collocation` = a real, common collocation with no dictionary headword. No entry is now marked unsourced.",
+    "WHAT IS STILL OPEN: no native speaker has read this file. A citation proves the Hindi exists and means what the entry claims; it does not prove that this idiom is the one a speaker would reach for in this sentence, or that the register matches. Two entries are flagged in their `note` as needing a human judgement call — `live-in-their-heads` (weakest source) and `pin-you-to-the-wall` (attested idiom, but a slight sense shift from the English). Those two are the review priority.",
+    "verify.py still does NOT close any of this. It proves the MECHANICS — placeholder survives, splice lands, surrounding Hindi agrees, entry doesn't fire on a literal use. It cannot tell you whether the chosen Hindi is the right idiom for the moment."
   ],
   "how_to_add_an_entry": [
-    "1. 'en' lists English surface forms that all mean the same thing. Whitespace and straight-vs-curly apostrophes are handled for you; case is ignored. Word order and tense are NOT guessed, so spell out the variants you want to catch.",
+    "1. 'en' lists English surface forms that all mean the same thing. Whitespace and straight-vs-curly apostrophes are handled for you; case is ignored. Word order and tense are NOT guessed, so spell out the variants you want to catch. Seed variants from WHISPER output, not from human captions — the tool transcribes with Whisper, and the two word things differently.",
     "2. 'hi' is the replacement. It is dropped verbatim into the slot the placeholder left, so it must read correctly in that position.",
-    "3. 'span' is the real decision. The translator inflects the words AROUND the placeholder and, having no noun to agree with, assumes masculine-singular. So: use span 'clause' (mask a whole clause) whenever the Hindi is a predicate or is feminine, and reserve span 'phrase' for short reusable entries whose Hindi is masculine or invariant.",
+    "3. 'span' is the real decision. The translator inflects the words AROUND the placeholder and, having no noun to agree with, assumes masculine-singular. So: use span 'clause' (mask a whole clause) whenever the Hindi is a predicate or is feminine, and reserve span 'phrase' for short reusable entries whose Hindi is masculine or invariant. Prefer 'clause' — it buys correct agreement AND near-immunity to false positives, and it lets you keep the RIGHT idiom instead of trading down to a mechanically safe one (see high-water-mark).",
     "4. 'sample' MUST be the real full sentence the idiom appeared in, never a trimmed version of it. The translator builds a different frame around the placeholder depending on the rest of the sentence, so a short sample can pass while the real line breaks. This is not hypothetical: a bare 'on parade' entry verified clean against a trimmed sample and then produced 'नुमाइश पर की' in the actual talk.",
-    "5. Run `python verify.py` after adding anything. It puts every entry through the real translator and flags a splice that came out wrong. Do not trust an entry you have not verified.",
-    "6. Adding an entry needs no code change. This file is data."
+    "5. BEFORE ANY OF THE ABOVE, two checks that killed an entry on 2026-07-27. (a) Is the ENGLISH actually an idiom? A dictionary must carry it — a learner forum is not attestation. 'nail someone to the wall' is a dictionary idiom; 'pin someone to the wall' is not, and that entry is now in the REMOVED block at the bottom of this file. Sourcing only the Hindi side and calling the pair sourced is the same mistake in a new place. (b) What does the PLAIN translation actually do? Run it. Every entry that belongs here exists because the plain output was actively broken — bleeding faces, ब्राउनी पॉइंट, a document वॉटरमार्क. If the plain output is merely flat rather than wrong, there is NO entry to add: replacing an acceptable answer is worse than having no rule.",
+    "6. 'note' MUST carry the citation URL for the Hindi, and 'confidence' MUST use the vocabulary in the provenance block above. An entry whose Hindi you cannot cite does not go in.",
+    "7. Any entry whose longest 'en' form is under ~4 words needs 'counter_examples', and Sage05 is asked before it is added — short entries are where false positives live.",
+    "8. Run `python verify.py` after adding anything. It puts every entry through the real translator and flags a splice that came out wrong. Do not trust an entry you have not verified. NOTE what verify.py cannot do: it proves the mechanism, not that the entry should exist. Step 5 is the check it will never make for you.",
+    "9. Adding an entry needs no code change. This file is data."
   ],
   "entries": [
     {
@@ -23,36 +27,45 @@
       "en": [
         "you can see the blood run from their face",
         "you can see the blood drain from their face",
-        "you could see the blood run from their face"
+        "you could see the blood run from their face",
+        "you can see the blood run from their faces",
+        "you can see the blood drain from their faces"
       ],
       "hi": "आप देख सकते हैं कि उनके चेहरे का रंग उड़ जाता है",
       "span": "clause",
       "sense": "they go pale with dread at the news",
+      "confidence": "attested-idiom",
+      "note": "चेहरे का रंग उड़ जाना is a standard muhavara, listed with meaning and usage sentences at https://leverageedu.com/blog/hi/chehre-ka-rang-ud-jana-muhavare-ka-arth/ and https://hindivarta.com/chehre-ka-rang-udna-muhavara-arth-vakya-prayog/ — glossed डर जाना / घबरा जाना, which is exactly the sense here. Unchanged from v1; v1 had it right.",
       "sample": "You say you work in education, you can see the blood run from their face.",
       "source": "ken-robinson-iG9CE55wbtY"
     },
     {
       "id": "brownie-points-clause",
       "en": [
-        "who gets all the brownie points"
+        "who gets all the brownie points",
+        "who gets all of the brownie points"
       ],
-      "hi": "शाबाशी किसे मिलती है",
+      "hi": "सारी वाहवाही कौन लूटता है",
       "span": "clause",
       "sense": "who collects all the credit and approval",
+      "confidence": "attested-idiom",
+      "note": "CHANGED in v2 from 'शाबाशी किसे मिलती है'. शाबाशी is just the noun 'praise' — the sentence was a plain translation. वाहवाही लूटना is the actual idiom for carrying off all the credit, listed with a usage example ('दूसरे को माल बाँटकर उसने खूब वाहवाही लूटी') at https://educalingo.com/hi/dic-hi/vahavahi — and लूटना carries the same slightly-sardonic edge as 'brownie points', which मिलती है did not.",
       "sample": "Who gets all the brownie points, who are the winners.",
       "source": "ken-robinson-iG9CE55wbtY"
     },
     {
       "id": "high-water-mark",
       "en": [
-        "the high-water mark",
-        "the high water mark"
+        "the high-water mark of all human achievement",
+        "the high water mark of all human achievement",
+        "the highwater mark of all human achievement",
+        "the high watermark of all human achievement"
       ],
-      "hi": "सर्वोच्च शिखर",
-      "span": "phrase",
-      "sense": "the peak, the highest point ever reached. Deliberately masculine: the feminine पराकाष्ठा makes the translator emit 'के पराकाष्ठा' instead of 'की'.",
-      "confidence": "plain-translation, not a Hindi idiom — see the provenance note at the top of this file",
-      "not_after": ["on", "left", "of the river", "of the tide", "of the flood", "from the flood"],
+      "hi": "समस्त मानवीय उपलब्धि की पराकाष्ठा",
+      "span": "clause",
+      "sense": "the peak, the highest point ever reached",
+      "confidence": "attested-word",
+      "note": "CHANGED in v2, and this is the entry the v1 provenance note called out as the clearest failure. v1 used the invented compound 'सर्वोच्च शिखर' as a PHRASE entry, and only because the correct word पराकाष्ठा is feminine and produced 'के पराकाष्ठा' when spliced into a short slot. Widening the span to the whole clause removes the agreement constraint entirely (the following 'के रूप में' does not inflect for gender), so the right word can be used. पराकाष्ठा = चरम सीमा, attested at https://hi.wiktionary.org/wiki/पराकाष्ठा, https://www.hindwi.org/hindi-dictionary/meaning-of-paraakaashtha and Collins (https://www.collinsdictionary.com/us/dictionary/hindi-english/पराकाष्ठा), with the usage 'मुगल राज्य एक समय उन्नति की पराकाष्ठा को प्राप्त हो गया था'. Standard literary Hindi rather than a muhavara, hence attested-word. `not_after` was dropped because the clause span makes it dead code; the counter_examples stay as the durable guard against anyone shortening `en` later. MEASURED 2026-07-27: this is also the entry that fired on the talk's human captions but NOT on Whisper (the 13-vs-12 gap). Whisper writes 'the high watermark' as ONE word where the captions wrote 'high-water mark', so v1's two forms both missed and this idiom never actually fired in production. All four spellings are now listed. Worth catching: Google's plain rendering of the real Whisper line is 'उपलब्धियों के उच्च वॉटरमार्क', i.e. a document watermark.",
       "counter_examples": [
         "You can see the high-water mark on the wall from the flood.",
         "The high-water mark of the river was three metres up the bank."
@@ -69,7 +82,8 @@
       "hi": "वो घिसी-पिटी बात",
       "span": "phrase",
       "sense": "a joke or story told so often it has gone stale",
-      "confidence": "well-attested Hindi idiom",
+      "confidence": "attested-idiom",
+      "note": "घिसी-पिटी / घिसा-पिटा is a dictionary headword: https://rekhtadictionary.com/meaning-of-ghisii-pitii and https://www.hindwi.org/hindi-dictionary/meaning-of-ghisaa-pita, glossed 'जो बहुत समय से एक ही रूप में प्रयोग हो रहा हो' and rendered in English as hackneyed/threadbare (https://glosbe.com/hi/en/घिसा-पिटा). Unchanged from v1; v1 had it right.",
       "not_after": ["tree", "trees", "roasting", "roasted", "stall", "seller"],
       "counter_examples": [
         "We sat under the old chestnut tree in the garden.",
@@ -83,10 +97,11 @@
       "en": [
         "give me a break"
       ],
-      "hi": "थोड़ा चैन से रहने दो",
+      "hi": "मेरा पीछा छोड़ो",
       "span": "clause",
       "sense": "stop bothering me, let me be",
-      "confidence": "natural spoken Hindi",
+      "confidence": "attested-idiom",
+      "note": "CHANGED in v2 from 'थोड़ा चैन से रहने दो', which was a serviceable paraphrase rather than an idiom. पीछा छोड़ना / पीछा छुड़ाना (and its stronger cousin पिंड छुड़ाना) is the attested muhavara for getting someone off your back: https://hindivarta.com/pind-chhudana-pichha-chhudana-muhavara-arth-vakya-prayog/, which carries the usage 'वह तो मेरा पिंड ही नहीं छोड़ता'. FOR SAGE05: 'मेरा पिंड छोड़ो' is the more colourful option and equally attested; I picked पीछा as the more neutral of the two for a TED-talk register. Say if you want पिंड.",
       "not_after": ["of", "from", "between", "after", "before"],
       "counter_examples": [
         "Give me a break of ten minutes between the sessions."
@@ -99,10 +114,11 @@
       "en": [
         "off the beat"
       ],
-      "hi": "ताल से बाहर",
+      "hi": "ताल से बेताल",
       "span": "phrase",
-      "sense": "out of time with the music. The literal reading turns 'beat' into a heartbeat.",
-      "confidence": "correct and natural, though a plain phrase rather than a fixed idiom",
+      "sense": "out of time with the music. The literal reading turns 'beat' into a heartbeat or a policeman's patrol.",
+      "confidence": "attested-word",
+      "note": "CHANGED in v2 from 'ताल से बाहर' (understandable, but a described position rather than the word Hindi actually uses). बेताल is a dictionary headword defined as precisely this: 'गायन वादन में ताल से चूक जानेवाला, संगीत में ताल का ध्यान न रखनेवाला' — https://www.hindwidictionary.com/meaning-of-betaal, with ताल itself at https://www.hindwi.org/hindi-dictionary/meaning-of-taal-5. Kept as 'ताल से बेताल' rather than bare 'बेताल' on purpose: बेताल alone is a homograph of the Vikram–Betaal spirit, and keeping ताल in the phrase forecloses that reading for a listener. LISTEN TO THIS ONE: the `sample` below is the caption wording, but Whisper mis-hears 'writhing' as 'riding', so the line the pipeline actually gets is 'grown men and women riding uncontrollably off the beat' and the Hindi comes out 'अनियंत्रित रूप से सवारी कर रहे हैं ताल से बेताल'. The splice lands and still beats the plain path (which drops 'off the beat' altogether), but it reads loose. The ASR error is upstream of this file and not fixable here.",
       "not_before": ["walked", "walk", "stepped", "step", "went", "come", "came", "getting", "got"],
       "counter_examples": [
         "The constable walked off the beat and went home.",
@@ -116,9 +132,11 @@
       "en": [
         "they live in their heads"
       ],
-      "hi": "वो अपने ही ख़यालों में जीते हैं",
+      "hi": "वो अपनी ही दुनिया में खोए रहते हैं",
       "span": "clause",
       "sense": "they are lost in thought, disconnected from their bodies. The literal version also flips the pronoun, making them live inside SOMEONE ELSE's head.",
+      "confidence": "attested-collocation",
+      "note": "CHANGED in v2 from 'वो अपने ही ख़यालों में जीते हैं', which was my own phrasing. THIS IS THE WEAKEST-SOURCED ENTRY IN THE FILE and the first thing to put to a native speaker. 'अपनी ही दुनिया में खोए रहना' is a real and common collocation, described on muhavare reference lists (https://www.successcds.net/class10/hindi/idioms.html, https://lokoktiyan.in/muhavare-in-hindi/), but I could not find it as a headword in Hindwi or Rekhta, so it does not get `attested-idiom`. Note also that the nearest actual muhavare — हवाई किले बनाना, खयाली पुलाव पकाना — mean daydreaming, which is the WRONG sense: Robinson means academics are disembodied, not fanciful. Rejected them for that reason.",
       "sample": "Not all of them, but typically, they live in their heads.",
       "source": "ken-robinson-iG9CE55wbtY"
     },
@@ -131,7 +149,8 @@
       "hi": "वो पढ़ाई में बिल्कुल फिसड्डी थी",
       "span": "clause",
       "sense": "she was very bad at schoolwork. The literal Hindi says she FELT hopeless, which is the wrong sense entirely.",
-      "confidence": "फिसड्डी is well-attested for exactly this (bad at studies). NOTE the Hindi hard-codes 'पढ़ाई' (schoolwork), so the guards below keep it to school contexts.",
+      "confidence": "attested-word",
+      "note": "फिसड्डी is a dictionary headword glossed 'पीछे रह जाने वाला, काम में पिछड़ा रहने वाला' — https://www.rekhtadictionary.com/meaning-of-phisaddii, https://www.hindwi.org/hindi-dictionary/meaning-of-phisaddii, and Collins gives it as a laggard / duffer (https://www.collinsdictionary.com/dictionary/hindi-english/फिसड्डी). Exactly 'hopeless at school'. Unchanged from v1; v1 had it right. NOTE the Hindi hard-codes 'पढ़ाई' (schoolwork), so the guards below keep it to school contexts.",
       "not_after": ["about", "at the", "in the face", "of ever"],
       "counter_examples": [
         "The nurse said she was really hopeless about her recovery chances."
@@ -144,20 +163,25 @@
       "en": [
         "we grow out of it"
       ],
-      "hi": "हम उसे खोते चले जाते हैं",
+      "hi": "वो हमारे हाथ से निकल जाती है",
       "span": "clause",
       "sense": "we lose it as we get older. The literal Hindi ('we grow outside of it') is nonsense.",
+      "confidence": "attested-idiom",
+      "note": "CHANGED in v2 from 'हम उसे खोते चले जाते हैं', which was plain. हाथ से निकल जाना is the attested muhavara for something passing out of your possession or control — glossed 'अधिकार से जाना' with the usage 'पहला ईनाम आते-आते हाथ से निकल गया' at https://leverageedu.com/blog/hi/hath-se-jana-muhavare-ka-arth/. It also keeps Robinson's contrast alive: we do not grow INTO creativity, it slips OUT of our hands. Feminine agreement (निकल जाती है) is with रचनात्मकता earlier in the same sentence, which the clause span makes safe.",
       "sample": "We don't grow into creativity, we grow out of it.",
       "source": "ken-robinson-iG9CE55wbtY"
     },
     {
       "id": "expertise-on-parade",
       "en": [
-        "all the expertise that's been on parade for the past four days"
+        "all the expertise that's been on parade for the past four days",
+        "all the expertise that has been on parade for the past four days"
       ],
-      "hi": "पिछले चार दिनों से सामने रखी गई तमाम विशेषज्ञता",
+      "hi": "पिछले चार दिनों से हो रही तमाम विशेषज्ञता की नुमाइश",
       "span": "clause",
-      "sense": "all the expertise that has been on display. Narrow on purpose: a bare 'on parade' entry was tried and REMOVED. Google treats the placeholder as a noun modifier here and emits 'X की विशेषज्ञता', so every short splice produced the broken 'नुमाइश पर की'. A literal parade is also a real sense of the phrase, so the short form was wrong more often than right. A narrow entry that is correct beats a broad one that is not.",
+      "sense": "all the expertise that has been on display. Narrow on purpose: a bare 'on parade' entry was tried and REMOVED. Google treats the placeholder as a noun modifier here, so every short splice produced the broken 'नुमाइश पर की'. A literal parade is also a real sense of the phrase, so the short form was wrong more often than right.",
+      "confidence": "attested-word",
+      "note": "CHANGED in v2 from 'पिछले चार दिनों से सामने रखी गई तमाम विशेषज्ञता'. This recovers the right word: नुमाइश (दिखावा / प्रदर्शन, with the same faint whiff of ostentation as 'on parade') is attested at https://www.rekhtadictionary.com/meaning-of-numaaish, https://www.hindwi.org/hindi-dictionary/meaning-of-numaaish and https://hi.wiktionary.org/wiki/नुमाइश. v1 dropped नुमाइश for a MECHANICAL reason, not a linguistic one — the broken 'नुमाइश पर की' came from a short phrase entry. Making नुमाइश the HEAD noun of the clause fixes that properly: the postposition now lands on नुमाइश, where it belongs. Same lesson as high-water-mark — widen the span, keep the right word.",
       "sample": "Nobody has a clue, despite all the expertise that's been on parade for the past four days, what the world will look like in five years' time.",
       "source": "ken-robinson-iG9CE55wbtY"
     },
@@ -167,9 +191,11 @@
         "they'll have a go",
         "they will have a go"
       ],
-      "hi": "वो कोशिश कर ही डालते हैं",
+      "hi": "वो हाथ आज़मा ही लेते हैं",
       "span": "clause",
       "sense": "they will give it a try anyway. The literal Hindi turns a willing attempt into an obligation ('they will HAVE TO try').",
+      "confidence": "attested-idiom",
+      "note": "CHANGED in v2 from 'वो कोशिश कर ही डालते हैं'. This is the cleanest idiom-for-idiom match in the file: हाथ आज़माना is listed in Hindwi Dictionary AS a muhavara and glossed in English as 'to try one's hand' / 'to have a fling at' — https://www.hindwidictionary.com/meaning-of-haath-aazmaanaa. 'Have a go' and 'try one's hand' are the same English idiom, so the pairing is sourced on both sides rather than reasoned about.",
       "sample": "If they don't know, they'll have a go.",
       "source": "ken-robinson-iG9CE55wbtY"
     },
@@ -179,27 +205,26 @@
         "kids will take a chance",
         "children will take a chance"
       ],
-      "hi": "बच्चे रिस्क ले ही लेते हैं",
+      "hi": "बच्चे जोखिम उठा ही लेते हैं",
       "span": "clause",
       "sense": "kids are willing to risk being wrong. The literal Hindi reads as taking an opportunity, which loses the risk.",
+      "confidence": "attested-idiom",
+      "note": "CHANGED in v2 from 'बच्चे रिस्क ले ही लेते हैं'. Two reasons. (1) जोखिम उठाना is the attested Hindi for putting yourself at risk — https://hi.wiktionary.org/wiki/जोखिम and https://mycoaching.in/muhavare, and दाँव लगाना is glossed as meaning जोखिम उठाना. (2) v1's version was a BUG, not just a style miss: it hard-coded the English loanword 'रिस्क' into the Hindi. This dictionary runs on every EN->HI translation whether or not --hinglish is on, so v1 leaked Hinglish register into the plain-Hindi output path. दाँव लगाना was the livelier alternative but reads as placing a bet; जोखिम keeps the risk-of-being-wrong sense Robinson means.",
       "sample": "What these things have in common is that kids will take a chance.",
       "source": "ken-robinson-iG9CE55wbtY"
-    },
+    }
+  ],
+  "REMOVED — kept as a record so the entry is not re-added": [
     {
       "id": "pin-you-to-the-wall",
-      "en": [
-        "they pin you to the wall"
+      "was": "they pin you to the wall -> वो आपको सवालों से घेर लेते हैं (v1) / वो आपको आड़े हाथों लेते हैं (v2 draft)",
+      "removed": "2026-07-27, by Sage05, and he was right to kill it",
+      "why": [
+        "THE ENGLISH SIDE IS NOT AN IDIOM. This is the failure the entry teaches. Both v1 and v2 asked whether the HINDI was attested and never asked whether the ENGLISH was an idiom at all. 'NAIL someone to the wall' is a dictionary idiom (Longman, Collins, Wiktionary, TheFreeDictionary). 'PIN someone to the wall' is in none of them — TheFreeDictionary carries only the literal 'pin someone to' (shove and hold in place). Its figurative sense appears only in learner forums and content farms, including two WordReference threads, one titled exactly 'They pin you to the wall'. Learners having to ask is the evidence: it is not a set phrase. Robinson said it loosely, blending 'pin down' with 'nail to the wall'.",
+        "THE PLAIN TRANSLATION WAS NEVER BROKEN. Google gave 'वे आपको परेशान कर देते हैं' (they trouble you) — flat, but not wrong. Every other entry in this file exists because the plain output was actively broken (bleeding faces, ब्राउनी पॉइंट, a document वॉटरमार्क, a school that retires). This one replaced an acceptable answer, which is precisely what this project already learned is worse than having no rule: see the false-positive lesson in AGENTS.md.",
+        "AND THE HINDI WAS WRONG ANYWAY. आड़े हाथों लेना is well attested but means to rebuke — Sage05's own glosses for it are 'take to task', 'haul over the coals', 'give someone a piece of one's mind', 'call someone on the carpet'. All four are telling someone off. The English means cornered and pressed. Wrong sense."
       ],
-      "hi": "वो आपको सवालों से घेर लेते हैं",
-      "span": "clause",
-      "sense": "they corner you and press you hard about it",
-      "confidence": "natural Hindi; सवालों से घेरना is idiomatic for being pressed with questions",
-      "not_after": ["with", "using", "by the"],
-      "counter_examples": [
-        "They pin you to the wall with those clips when they measure your height."
-      ],
-      "sample": "But if you ask about their education, they pin you to the wall.",
-      "source": "ken-robinson-iG9CE55wbtY"
+      "rule_this_produced": "Before adding an entry, check the ENGLISH is a real idiom (a dictionary must carry it, not a forum), AND check what the plain translation actually does. If the plain output is acceptable, there is no entry to add. An idiom dictionary earns its keep only where literal translation breaks."
     }
   ]
 }

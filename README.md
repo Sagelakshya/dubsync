@@ -206,8 +206,17 @@ from dubsync, so it is reusable for subtitles, copy, or any other English→Hind
   which lines and how fast). Dials:
   - `--max-speed 1.5` — the "natural" threshold; lines faster than this are flagged.
   - `--hard-max 3.0` — absolute ceiling used to force the fit.
+  - `--tts-rate-max 40` — how much of an overrun the **voice** absorbs by speaking
+    faster, before ffmpeg squeezes the rest. Overrunning lines are re-spoken by the
+    voice engine at up to +40%, which sounds like brisk speech rather than a
+    recording played fast. `0` restores the old ffmpeg-only behaviour. On a
+    19-minute talk this took the lines forced past the `--hard-max` ceiling (i.e.
+    clipped) from 26 down to 3.
   - `--allow-drift` — the opposite choice: cap at `--max-speed` for a calmer voice
     and let long lines overrun instead (re-anchored at the next pause).
+    **Suits short clips.** On dense speech there are too few pauses to re-anchor
+    against and the lag compounds — simulated on that same 19-minute talk it ends
+    up over a minute behind the picture. Prefer `--retime` below for long video.
 - `--download` needs internet; muxing/fitting needs the bundled `D:\Toolkit\ffmpeg`
   (or ffmpeg on PATH). Deps: adds `yt-dlp` (for `--download`) to what the web app
   already uses.

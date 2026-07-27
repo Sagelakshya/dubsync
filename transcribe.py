@@ -24,12 +24,24 @@ mid-word.
 """
 from __future__ import annotations
 
+import threading
+
 SR = 16000                  # Whisper's sample rate; everything here is in these samples
 CHUNK_SECONDS = 300.0       # 5 minutes per pass — small enough for a loaded laptop
 SNAP_SECONDS = 10.0         # how far to hunt around a cut for a quiet moment
 
 # Cache loaded models by (size, device) so a second call in the same process is free.
 _MODELS: dict[tuple[str, str], object] = {}
+
+# Only one transcription at a time per process. The GUI already allows only one
+# dub at a time (app.MAX_RUNNING), but that is a policy at the HTTP layer and this
+# module is meant to be reusable on its own, so it defends its own shared state:
+# without the lock two threads both miss the `_MODELS` cache and each build a
+# ~480 MB model, then compete for every core (CTranslate2 defaults to all of
+# them). Measured cost of getting this wrong: a 19-second clip stuck at 10% for
+# eleven minutes. A waiting caller blocks here instead, which is slower to start
+# and far faster to finish.
+_RUN_LOCK = threading.Lock()
 
 
 def _cuda_available() -> bool:
@@ -138,16 +150,19 @@ def _transcribe_piece(model, audio, lang: str | None) -> list[dict]:
 
 def _run(audio, model_size: str, lang: str | None, device: str,
          on_progress=None) -> list[dict]:
-    model = _get_model(model_size, device)
-    pieces = _chunks(audio, int(CHUNK_SECONDS * SR))
-    cues: list[dict] = []
-    for i, (start, end) in enumerate(pieces, 1):
-        if on_progress and len(pieces) > 1:
-            on_progress(i, len(pieces))
-        shift = start / SR                              # chunk-local -> whole-file time
-        cues += [{**c, "start": c["start"] + shift}
-                 for c in _transcribe_piece(model, audio[start:end], lang)]
-    return cues
+    # Held across the whole run, not just the model load: two concurrent ASR passes
+    # oversubscribe the CPU badly enough to look like a hang. See _RUN_LOCK.
+    with _RUN_LOCK:
+        model = _get_model(model_size, device)
+        pieces = _chunks(audio, int(CHUNK_SECONDS * SR))
+        cues: list[dict] = []
+        for i, (start, end) in enumerate(pieces, 1):
+            if on_progress and len(pieces) > 1:
+                on_progress(i, len(pieces))
+            shift = start / SR                          # chunk-local -> whole-file time
+            cues += [{**c, "start": c["start"] + shift}
+                     for c in _transcribe_piece(model, audio[start:end], lang)]
+        return cues
 
 
 def transcribe(media_path: str, *, model_size: str = "small",

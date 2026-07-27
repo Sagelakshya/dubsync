@@ -169,7 +169,18 @@ def synthesize(text: str, lang: str, voice: str | None = None,
 # persist. The finished FILES are on disk in OUT_DIR; only the live status is here.
 JOBS: dict[str, dict] = {}
 LOCK = threading.Lock()
-MAX_RUNNING = 2          # a dub is CPU-heavy; more than two at once just thrashes
+# ONE dub at a time. This was 2 on the guess that "more than two at once just
+# thrashes"; measured 2026-07-27, two is already too many — a 19-second clip sat
+# at 10% for eleven minutes because both jobs were in Whisper together.
+#
+# Serialising only the transcription was the tempting narrower fix, and it is the
+# wrong one: a single dub deliberately makes Whisper and the local Gemma take
+# turns (dub.py releases the Whisper model in a `finally` before the Hinglish
+# pass, and hinglish.preflight uses keep_alive=0 for the same reason). Two
+# overlapping dubs put job B's Whisper against job A's Gemma, so a per-model lock
+# would trade one measured wedge for an unmeasured one on a box this tight.
+# One at a time also makes the code agree with the rule AGENTS.md already states.
+MAX_RUNNING = 1
 
 # Footage choice -> the dub.py preset that suits it. Talking heads can't take much
 # video stretching (visible), faceless footage can, and "audio only" skips video
@@ -254,8 +265,9 @@ def api_dub_start():
         return jsonify(ok=False, error="Hinglish only applies to Hindi."), 400
     with LOCK:
         if _running_count() >= MAX_RUNNING:
-            return jsonify(ok=False, error="Two dubs are already running — they're "
-                                           "CPU-heavy, so wait for one to finish."), 429
+            return jsonify(ok=False, error="A dub is already running. They're too "
+                                           "CPU- and memory-heavy to overlap, so "
+                                           "wait for this one to finish."), 429
 
     preset = dict(FOOTAGE[footage])
     ext = preset.pop("ext")
